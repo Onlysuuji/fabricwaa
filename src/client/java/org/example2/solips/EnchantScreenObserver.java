@@ -2,6 +2,7 @@ package org.example2.solips;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.EnchantingTableBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
@@ -153,7 +154,12 @@ public final class EnchantScreenObserver {
             return;
         }
 
-        int bookshelves = resolvedBookshelves;
+        int bookshelves = normalizeBookshelvesFromObservedCosts(resolvedBookshelves, costs);
+        if (bookshelves != resolvedBookshelves) {
+            System.out.println("[bookshelf-corrected] raw=" + resolvedBookshelves + " corrected=" + bookshelves
+                    + " costs=" + Arrays.toString(costs));
+        }
+
         String key = ObservationRecord.buildKey(stack.getItem(), bookshelves, costs, clueIds, clueLevels);
         if (!key.equals(pendingKey)) {
             pendingKey = key;
@@ -352,37 +358,21 @@ public final class EnchantScreenObserver {
 
     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
         int count = 0;
-
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                if (dx == 0 && dz == 0) {
-                    continue;
-                }
-
-                if (!isGapOpen(world, tablePos.add(dx, 0, dz)) || !isGapOpen(world, tablePos.add(dx, 1, dz))) {
-                    continue;
-                }
-
-                count += getBookshelfCount(world, tablePos.add(dx * 2, 0, dz * 2));
-                count += getBookshelfCount(world, tablePos.add(dx * 2, 1, dz * 2));
-
-                if (dx != 0 && dz != 0) {
-                    count += getBookshelfCount(world, tablePos.add(dx * 2, 0, dz));
-                    count += getBookshelfCount(world, tablePos.add(dx * 2, 1, dz));
-                    count += getBookshelfCount(world, tablePos.add(dx, 0, dz * 2));
-                    count += getBookshelfCount(world, tablePos.add(dx, 1, dz * 2));
-                }
+        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
+            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
+                count++;
             }
         }
-
         return Math.min(count, 15);
     }
 
-    private static boolean isGapOpen(World world, BlockPos pos) {
-        return world.isAir(pos) || world.getBlockState(pos).isReplaceable();
-    }
-
-    private static int getBookshelfCount(World world, BlockPos pos) {
-        return world.getBlockState(pos).isOf(Blocks.BOOKSHELF) ? 1 : 0;
+    private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {
+        if (costs == null || costs.length < 3) {
+            return bookshelves;
+        }
+        if (costs[2] >= 30 && bookshelves < 15) {
+            return 15;
+        }
+        return bookshelves;
     }
 }

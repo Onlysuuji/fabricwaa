@@ -30,7 +30,13 @@ public final class EnchantSeedCracker {
     private static final long COST_SCAN_CHUNK_SIZE = 1L << 20;
     private static final int COST_REFILTER_CHUNK_SIZE = 1 << 18;
     private static final int COST_REFILTER_PARALLEL_THRESHOLD = 1 << 17;
-    private static final int CLUE_SLOT_ORDER[] = {2, 1, 0};
+
+    private static final int CLUE_THREADS = COST_THREADS;
+    private static final int CLUE_FILTER_CHUNK_SIZE = 1 << 14;
+    private static final int CLUE_FILTER_PARALLEL_THRESHOLD = 1 << 12;
+    private static final int CLUE_PROGRESS_FLUSH_INTERVAL = 1 << 12;
+
+    private static final int[] CLUE_SLOT_ORDER = {2, 1, 0};
 
     private static final Identifier DEPTH_STRIDER_ID = Identifier.ofVanilla("depth_strider");
     private static final Identifier UNBREAKING_ID = Identifier.ofVanilla("unbreaking");
@@ -43,6 +49,8 @@ public final class EnchantSeedCracker {
     private static volatile Field reflectedRandomField;
 
     private static final ThreadLocal<Random> COST_RANDOM = ThreadLocal.withInitial(() -> Random.create(0L));
+    private static final ThreadLocal<ScratchMenuHolder> SCRATCH_MENU = ThreadLocal.withInitial(ScratchMenuHolder::new);
+
     private static final ExecutorService COST_EXECUTOR = Executors.newFixedThreadPool(COST_THREADS, runnable -> {
         Thread thread = new Thread(runnable, "SolipsCostWorker");
         thread.setDaemon(true);
@@ -52,13 +60,95 @@ public final class EnchantSeedCracker {
     private EnchantSeedCracker() {
     }
 
+    private static void debugLog(String event, String detail) {
+        System.out.println("[seed-debug] " + event + " " + detail);
+    }
+
+    private static final class ScratchMenuHolder {
+        private EnchantmentScreenHandler menu;
+
+        private EnchantmentScreenHandler get() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null) {
+                menu = null;
+                return null;
+            }
+            if (menu == null) {
+                menu = new EnchantmentScreenHandler(0, client.player.getInventory());
+            }
+            return menu;
+        }
+
+        private void clear() {
+            menu = null;
+        }
+    }
+
+    private static final class PreparedObservation {
+        final ItemStack stack;
+        final int bookshelves;
+        final int enchantability;
+        final int[] costs;
+        final int[] clueIds;
+        final int[] clueLevels;
+        final String itemPath;
+        final boolean[] ignoredSlots = new boolean[3];
+
+        PreparedObservation(ObservationRecord record) {
+            this.stack = record.createStack();
+            this.bookshelves = record.getBookshelves();
+            this.enchantability = this.stack.getItem().getEnchantability();
+            this.costs = record.getCosts();
+            this.clueIds = record.getClueIds();
+            this.clueLevels = record.getClueLevels();
+            Identifier itemKey = Registries.ITEM.getId(this.stack.getItem());
+            this.itemPath = itemKey == null ? "" : itemKey.getPath();
+        }
+
+        void resolveIgnoredSlots(Registry<Enchantment> enchantmentRegistry) {
+            Arrays.fill(ignoredSlots, false);
+            for (int slot = 0; slot < 3; slot++) {
+                int observedClueId = clueIds[slot];
+                if (observedClueId < 0) {
+                    continue;
+                }
+
+                Enchantment observed = enchantmentRegistry.get(observedClueId);
+                if (observed == null) {
+                    continue;
+                }
+
+                Identifier observedKey = enchantmentRegistry.getId(observed);
+                if (observedKey == null) {
+                    continue;
+                }
+
+                if (itemPath.endsWith("_boots") && DEPTH_STRIDER_ID.equals(observedKey)) {
+                    ignoredSlots[slot] = true;
+                    continue;
+                }
+
+                if(itemPath.equals("book") && (UNBREAKING_ID.equals(observedKey) || DEPTH_STRIDER_ID.equals(observedKey))){
+                    ignoredSlots[slot] = true;
+                    continue;
+                }
+
+                if (itemPath.endsWith("_sword") && UNBREAKING_ID.equals(observedKey)) {
+                    ignoredSlots[slot] = true;
+                }
+            }
+        }
+    }
+
     public static void submitObservation(ObservationRecord observation) {
         if (observation == null) {
             return;
         }
         if (!SeedCrackState.addObservationIfAbsent(observation)) {
+            debugLog("obs-duplicate", "key=" + observation.getKey());
             return;
         }
+        debugLog("obs-queued", "item=" + observation.getItem() + " bookshelves=" + observation.getBookshelves() + " costs=" + Arrays.toString(observation.getCosts()) + " clueIds=" + Arrays.toString(observation.getClueIds()) + " clueLv=" + Arrays.toString(observation.getClueLevels()));
         ensureWorkerRunning();
     }
 
@@ -94,6 +184,7 @@ public final class EnchantSeedCracker {
                 }
 
                 SeedCrackState.beginRun(expectedEpoch);
+                debugLog("run-begin", "epoch=" + expectedEpoch + " activated=" + activated.size() + " applied=" + SeedCrackState.getAppliedObservationCount() + " queued=" + SeedCrackState.getQueuedObservationCount());
 
                 while (true) {
                     processAllPendingCostConstraints(expectedEpoch);
@@ -116,6 +207,7 @@ public final class EnchantSeedCracker {
                 logObservationSummary(activated.get(activated.size() - 1));
             }
         } finally {
+            SCRATCH_MENU.get().clear();
             synchronized (EnchantSeedCracker.class) {
                 if (Thread.currentThread() == worker) {
                     worker = null;
@@ -151,13 +243,21 @@ public final class EnchantSeedCracker {
     }
 
     private static void processCostConstraint(ObservationRecord record, int expectedEpoch) {
+        PreparedObservation prepared = new PreparedObservation(record);
         int[] current = SeedCrackState.getCostCandidatesArraySnapshot(expectedEpoch);
         int[] next;
 
-        if (current.length == 0 && SeedCrackState.getCostMatched() == 0) {
-            next = fullCostScan(record, expectedEpoch);
+        debugLog("cost-start", "epoch=" + expectedEpoch + " costKey=" + record.getCostKey() + " current=" + current.length + " initialized=" + SeedCrackState.isCostSearchInitialized());
+
+        if (!SeedCrackState.isCostSearchInitialized()) {
+            SeedCrackState.markCostSearchInitialized(expectedEpoch);
+            debugLog("cost-full-start", "epoch=" + expectedEpoch + " total=" + SeedCrackState.TOTAL_SEEDS + " costKey=" + record.getCostKey());
+            next = fullCostScan(prepared, expectedEpoch);
+            debugLog("cost-full-end", "epoch=" + expectedEpoch + " matched=" + next.length + " costKey=" + record.getCostKey());
         } else {
-            next = filterByCost(current, record);
+            debugLog("cost-refilter-start", "epoch=" + expectedEpoch + " input=" + current.length + " costKey=" + record.getCostKey());
+            next = filterByCost(current, prepared, expectedEpoch, record.getCostKey());
+            debugLog("cost-refilter-end", "epoch=" + expectedEpoch + " input=" + current.length + " matched=" + next.length + " costKey=" + record.getCostKey());
         }
 
         if (SeedCrackState.getResetEpoch() != expectedEpoch) {
@@ -165,11 +265,10 @@ public final class EnchantSeedCracker {
         }
 
         SeedCrackState.replaceCostCandidates(next, expectedEpoch);
-        SeedCrackState.finishCostPhase(expectedEpoch);
         SeedCrackState.markCostKeyProcessed(record.getCostKey(), expectedEpoch);
     }
 
-    private static int[] fullCostScan(ObservationRecord record, int expectedEpoch) {
+    private static int[] fullCostScan(PreparedObservation record, int expectedEpoch) {
         IntArrayBuilder matches = new IntArrayBuilder(4096);
         long nextStart = 0L;
 
@@ -199,17 +298,24 @@ public final class EnchantSeedCracker {
         return matches.toArray();
     }
 
-    private static int[] filterByCost(int[] current, ObservationRecord record) {
+    private static int[] filterByCost(int[] current, PreparedObservation record, int expectedEpoch, String costKey) {
         if (current.length == 0) {
+            debugLog("cost-refilter-skip", "epoch=" + expectedEpoch + " input=0 costKey=" + costKey);
+            SeedCrackState.setCostRefilterProgress(0, 0, 0, expectedEpoch);
             return new int[0];
         }
 
         if (COST_THREADS <= 1 || current.length < COST_REFILTER_PARALLEL_THRESHOLD) {
             Random random = COST_RANDOM.get();
             IntArrayBuilder next = new IntArrayBuilder(Math.max(16, current.length / 8));
+            int processed = 0;
             for (int seed : current) {
                 if (matchesCosts(record, seed, random)) {
                     next.add(seed);
+                }
+                processed++;
+                if ((processed & 0xFFF) == 0 || processed == current.length) {
+                    SeedCrackState.setCostRefilterProgress(processed, current.length, next.size(), expectedEpoch);
                 }
             }
             return next.toArray();
@@ -220,23 +326,28 @@ public final class EnchantSeedCracker {
 
         while (nextIndex < current.length) {
             List<Future<SeedBatch>> futures = new ArrayList<>(COST_THREADS);
+            int submitted = 0;
             for (int i = 0; i < COST_THREADS && nextIndex < current.length; i++) {
                 int start = nextIndex;
                 int end = Math.min(start + COST_REFILTER_CHUNK_SIZE, current.length);
                 nextIndex = end;
+                submitted += end - start;
                 futures.add(COST_EXECUTOR.submit(() -> filterCostChunk(current, start, end, record)));
             }
 
+            int processed = nextIndex - submitted;
             for (Future<SeedBatch> future : futures) {
                 SeedBatch batch = await(future);
                 merged.addAll(batch.seeds, batch.size);
+                processed += batch.inputCount;
+                SeedCrackState.setCostRefilterProgress(processed, current.length, merged.size(), expectedEpoch);
             }
         }
 
         return merged.toArray();
     }
 
-    private static CostChunkResult scanCostChunk(ObservationRecord record, long start, long end, int expectedEpoch) {
+    private static CostChunkResult scanCostChunk(PreparedObservation record, long start, long end, int expectedEpoch) {
         Random random = COST_RANDOM.get();
         IntArrayBuilder matches = new IntArrayBuilder(256);
 
@@ -252,7 +363,7 @@ public final class EnchantSeedCracker {
         return new CostChunkResult(matches.toArray(), matches.size(), end);
     }
 
-    private static SeedBatch filterCostChunk(int[] current, int start, int end, ObservationRecord record) {
+    private static SeedBatch filterCostChunk(int[] current, int start, int end, PreparedObservation record) {
         Random random = COST_RANDOM.get();
         IntArrayBuilder next = new IntArrayBuilder(Math.max(32, (end - start) >>> 3));
         for (int i = start; i < end; i++) {
@@ -276,22 +387,19 @@ public final class EnchantSeedCracker {
         }
     }
 
-    private static boolean matchesCosts(ObservationRecord record, int seed, Random random) {
-        ItemStack stack = record.createStack();
-        if (stack.getItem().getEnchantability() <= 0) {
-            int[] costs = record.getCosts();
-            return costs[0] == 0 && costs[1] == 0 && costs[2] == 0;
+    private static boolean matchesCosts(PreparedObservation record, int seed, Random random) {
+        if (record.enchantability <= 0) {
+            return record.costs[0] == 0 && record.costs[1] == 0 && record.costs[2] == 0;
         }
 
-        int[] observedCosts = record.getCosts();
         random.setSeed(seed);
 
         for (int slot = 0; slot < 3; slot++) {
-            int cost = EnchantmentHelper.calculateRequiredExperienceLevel(random, slot, record.getBookshelves(), stack);
+            int cost = EnchantmentHelper.calculateRequiredExperienceLevel(random, slot, record.bookshelves, record.stack);
             if (cost < slot + 1) {
                 cost = 0;
             }
-            if (cost != observedCosts[slot]) {
+            if (cost != record.costs[slot]) {
                 return false;
             }
         }
@@ -299,6 +407,16 @@ public final class EnchantSeedCracker {
     }
 
     private static boolean applyPendingClueConstraints(int expectedEpoch) {
+        DynamicRegistryManager registryManager = getRegistryManager();
+        if (registryManager == null) {
+            return false;
+        }
+
+        Registry<Enchantment> enchantmentRegistry = registryManager.get(RegistryKeys.ENCHANTMENT);
+        if (enchantmentRegistry == null) {
+            return false;
+        }
+
         int[] source = SeedCrackState.isClueFilterInitialized()
                 ? SeedCrackState.getFinalCandidatesArraySnapshot(expectedEpoch)
                 : SeedCrackState.getCostCandidatesArraySnapshot(expectedEpoch);
@@ -306,6 +424,20 @@ public final class EnchantSeedCracker {
         List<ObservationRecord> targets = SeedCrackState.isClueFilterInitialized()
                 ? SeedCrackState.getPendingClueObservationsSnapshot(expectedEpoch)
                 : SeedCrackState.getAppliedObservationsSnapshot();
+
+        debugLog("clue-phase-check", "epoch=" + expectedEpoch + " source=" + source.length + " targets=" + targets.size() + " initialized=" + SeedCrackState.isClueFilterInitialized());
+
+        if (source.length <= 1) {
+            SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
+            for (ObservationRecord record : targets) {
+                if (!SeedCrackState.hasProcessedClueObservationKey(record.getKey())) {
+                    SeedCrackState.markObservationClueProcessed(record.getKey(), expectedEpoch);
+                }
+            }
+            SeedCrackState.markClueFilterInitialized(expectedEpoch);
+            debugLog("clue-skip", "epoch=" + expectedEpoch + " source=" + source.length + " reason=cost_candidates_leq_1");
+            return true;
+        }
 
         for (ObservationRecord record : targets) {
             if (SeedCrackState.getResetEpoch() != expectedEpoch) {
@@ -315,64 +447,164 @@ public final class EnchantSeedCracker {
                 continue;
             }
 
-            IntArrayBuilder next = new IntArrayBuilder(Math.max(16, source.length / 8));
+            PreparedObservation prepared = new PreparedObservation(record);
+            prepared.resolveIgnoredSlots(enchantmentRegistry);
             SeedCrackState.clearFinalCandidates(expectedEpoch);
+            SeedCrackState.beginCluePhase(source.length, expectedEpoch);
+            debugLog("clue-filter-start", "epoch=" + expectedEpoch + " input=" + source.length + " key=" + record.getKey());
 
-            for (int i = 0; i < source.length; i++) {
-                if (SeedCrackState.getResetEpoch() != expectedEpoch) {
-                    return false;
+            ClueFilterResult result = filterByClue(source, prepared, registryManager, enchantmentRegistry, expectedEpoch);
+            if (SeedCrackState.getResetEpoch() != expectedEpoch) {
+                return false;
+            }
+            if (result.interrupted) {
+                if (SeedCrackState.isClueFilterInitialized()) {
+                    SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
                 }
-                if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
-                    if (SeedCrackState.isClueFilterInitialized()) {
-                        SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
-                    }
-                    return false;
-                }
-
-                int seed = source[i];
-                if (matchesClues(record, seed)) {
-                    next.add(seed);
-                }
-
-                if ((i & 0xFFF) == 0) {
-                    SeedCrackState.setClueFilterProgress(i, source.length, next.size(), expectedEpoch);
-                }
+                debugLog("clue-filter-interrupted", "epoch=" + expectedEpoch + " key=" + record.getKey() + " source=" + source.length);
+                return false;
             }
 
-            source = next.toArray();
+            source = result.seeds;
             SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
             SeedCrackState.setClueFilterProgress(source.length, Math.max(source.length, 1), source.length, expectedEpoch);
             SeedCrackState.markObservationClueProcessed(record.getKey(), expectedEpoch);
             SeedCrackState.markClueFilterInitialized(expectedEpoch);
+            debugLog("clue-filter-end", "epoch=" + expectedEpoch + " matched=" + source.length + " key=" + record.getKey());
+            if (source.length == 0) {
+                debugLog("clue-filter-zero", "epoch=" + expectedEpoch + " item=" + record.getItem() + " bookshelves=" + record.getBookshelves() + " costs=" + Arrays.toString(record.getCosts()) + " clueIds=" + Arrays.toString(record.getClueIds()) + " clueLv=" + Arrays.toString(record.getClueLevels()));
+            }
         }
 
         return true;
     }
 
-    private static boolean matchesClues(ObservationRecord record, int seed) {
+    private static ClueFilterResult filterByClue(
+            int[] source,
+            PreparedObservation record,
+            DynamicRegistryManager registryManager,
+            Registry<Enchantment> enchantmentRegistry,
+            int expectedEpoch
+    ) {
+        if (source.length == 0) {
+            return ClueFilterResult.completed(new int[0]);
+        }
+
+        if (CLUE_THREADS <= 1 || source.length < CLUE_FILTER_PARALLEL_THRESHOLD) {
+            return filterByClueSequential(source, record, registryManager, enchantmentRegistry, expectedEpoch);
+        }
+
+        IntArrayBuilder merged = new IntArrayBuilder(Math.max(16, source.length / 8));
+        int processed = 0;
+
+        while (processed < source.length) {
+            if (SeedCrackState.getResetEpoch() != expectedEpoch) {
+                return ClueFilterResult.interrupted();
+            }
+            if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
+                return ClueFilterResult.interrupted();
+            }
+
+            List<Future<SeedBatch>> futures = new ArrayList<>(CLUE_THREADS);
+            int submitted = 0;
+            for (int i = 0; i < CLUE_THREADS && processed < source.length; i++) {
+                int start = processed;
+                int end = Math.min(start + CLUE_FILTER_CHUNK_SIZE, source.length);
+                processed = end;
+                submitted += end - start;
+                futures.add(COST_EXECUTOR.submit(() -> filterClueChunk(source, start, end, record, registryManager, enchantmentRegistry, expectedEpoch)));
+            }
+
+            int batchProcessed = processed - submitted;
+            for (Future<SeedBatch> future : futures) {
+                SeedBatch batch = await(future);
+                if (SeedCrackState.getResetEpoch() != expectedEpoch) {
+                    return ClueFilterResult.interrupted();
+                }
+                if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
+                    return ClueFilterResult.interrupted();
+                }
+                merged.addAll(batch.seeds, batch.size);
+                batchProcessed += batch.inputCount;
+                SeedCrackState.setClueFilterProgress(batchProcessed, source.length, merged.size(), expectedEpoch);
+            }
+        }
+
+        return ClueFilterResult.completed(merged.toArray());
+    }
+
+    private static ClueFilterResult filterByClueSequential(
+            int[] source,
+            PreparedObservation record,
+            DynamicRegistryManager registryManager,
+            Registry<Enchantment> enchantmentRegistry,
+            int expectedEpoch
+    ) {
+        IntArrayBuilder next = new IntArrayBuilder(Math.max(16, source.length / 8));
+        for (int i = 0; i < source.length; i++) {
+            if (SeedCrackState.getResetEpoch() != expectedEpoch) {
+                return ClueFilterResult.interrupted();
+            }
+            if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
+                return ClueFilterResult.interrupted();
+            }
+
+            int seed = source[i];
+            if (matchesClues(record, seed, registryManager, enchantmentRegistry)) {
+                next.add(seed);
+            }
+
+            if (((i + 1) & (CLUE_PROGRESS_FLUSH_INTERVAL - 1)) == 0 || i + 1 == source.length) {
+                SeedCrackState.setClueFilterProgress(i + 1, source.length, next.size(), expectedEpoch);
+            }
+        }
+        return ClueFilterResult.completed(next.toArray());
+    }
+
+    private static SeedBatch filterClueChunk(
+            int[] source,
+            int start,
+            int end,
+            PreparedObservation record,
+            DynamicRegistryManager registryManager,
+            Registry<Enchantment> enchantmentRegistry,
+            int expectedEpoch
+    ) {
+        IntArrayBuilder next = new IntArrayBuilder(Math.max(16, (end - start) / 8));
+        for (int i = start; i < end; i++) {
+            if (((i - start) & 0x3FF) == 0) {
+                if (SeedCrackState.getResetEpoch() != expectedEpoch || SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
+                    break;
+                }
+            }
+            int seed = source[i];
+            if (matchesClues(record, seed, registryManager, enchantmentRegistry)) {
+                next.add(seed);
+            }
+        }
+        return new SeedBatch(next.toArray(), next.size(), end - start);
+    }
+
+    private static boolean matchesClues(
+            PreparedObservation record,
+            int seed,
+            DynamicRegistryManager registryManager,
+            Registry<Enchantment> enchantmentRegistry
+    ) {
         try {
             EnchantmentScreenHandler menu = getScratchMenu();
             if (menu == null || !setMenuSeed(menu, seed)) {
                 return false;
             }
 
-            DynamicRegistryManager registryManager = getRegistryManager();
-            if (registryManager == null) {
-                return false;
-            }
-
-            Registry<Enchantment> enchantmentRegistry = registryManager.get(RegistryKeys.ENCHANTMENT);
-            int[] clueIds = record.getClueIds();
-            int[] clueLevels = record.getClueLevels();
-            int[] costs = record.getCosts();
-            ItemStack stack = record.createStack();
+            int[] clueIds = record.clueIds;
+            int[] clueLevels = record.clueLevels;
+            int[] costs = record.costs;
+            ItemStack stack = record.stack;
+            boolean[] ignoredSlots = record.ignoredSlots;
 
             for (int slot : CLUE_SLOT_ORDER) {
-                if (costs[slot] <= 0) {
-                    continue;
-                }
-
-                if (shouldIgnoreObservedClue(record, slot, enchantmentRegistry)) {
+                if (costs[slot] <= 0 || ignoredSlots[slot]) {
                     continue;
                 }
 
@@ -401,35 +633,6 @@ public final class EnchantSeedCracker {
         }
     }
 
-    private static boolean shouldIgnoreObservedClue(ObservationRecord record, int slot, Registry<Enchantment> enchantmentRegistry) {
-        int observedClueId = record.getClueIds()[slot];
-        if (observedClueId < 0) {
-            return false;
-        }
-
-        Enchantment observed = enchantmentRegistry.get(observedClueId);
-        if (observed == null) {
-            return false;
-        }
-
-        Identifier observedKey = enchantmentRegistry.getId(observed);
-        if (observedKey == null) {
-            return false;
-        }
-
-        Identifier itemKey = Registries.ITEM.getId(record.getItem());
-        if (itemKey == null) {
-            return false;
-        }
-
-        String itemPath = itemKey.getPath();
-        if (itemPath.endsWith("_boots") && DEPTH_STRIDER_ID.equals(observedKey)) {
-            return true;
-        }
-
-        return itemPath.endsWith("_sword") && UNBREAKING_ID.equals(observedKey);
-    }
-
     private static DynamicRegistryManager getRegistryManager() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.world != null) {
@@ -445,11 +648,7 @@ public final class EnchantSeedCracker {
     }
 
     private static EnchantmentScreenHandler getScratchMenu() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null) {
-            return null;
-        }
-        return new EnchantmentScreenHandler(0, client.player.getInventory());
+        return SCRATCH_MENU.get().get();
     }
 
     private static boolean setMenuSeed(EnchantmentScreenHandler menu, int seed) {
@@ -520,7 +719,9 @@ public final class EnchantSeedCracker {
                 .append(" costs=").append(Arrays.toString(record.getCosts()))
                 .append(" clueIds=").append(Arrays.toString(record.getClueIds()))
                 .append(" clueLv=").append(Arrays.toString(record.getClueLevels()))
+                .append(" phase=").append(SeedCrackState.getPhase())
                 .append(" checked=").append(SeedCrackState.getChecked())
+                .append(" total=").append(SeedCrackState.getPhaseTotal())
                 .append(" costMatched=").append(SeedCrackState.getCostMatched())
                 .append(" matched=").append(SeedCrackState.getMatched())
                 .append(" applied=").append(SeedCrackState.getAppliedObservationCount())
@@ -537,10 +738,16 @@ public final class EnchantSeedCracker {
     private static final class SeedBatch {
         final int[] seeds;
         final int size;
+        final int inputCount;
 
         private SeedBatch(int[] seeds, int size) {
+            this(seeds, size, size);
+        }
+
+        private SeedBatch(int[] seeds, int size, int inputCount) {
             this.seeds = seeds;
             this.size = size;
+            this.inputCount = inputCount;
         }
     }
 
@@ -553,6 +760,24 @@ public final class EnchantSeedCracker {
             this.seeds = seeds;
             this.size = size;
             this.endCursor = endCursor;
+        }
+    }
+
+    private static final class ClueFilterResult {
+        final int[] seeds;
+        final boolean interrupted;
+
+        private ClueFilterResult(int[] seeds, boolean interrupted) {
+            this.seeds = seeds;
+            this.interrupted = interrupted;
+        }
+
+        private static ClueFilterResult completed(int[] seeds) {
+            return new ClueFilterResult(seeds, false);
+        }
+
+        private static ClueFilterResult interrupted() {
+            return new ClueFilterResult(new int[0], true);
         }
     }
 

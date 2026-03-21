@@ -27,6 +27,20 @@ fabricApi {
     }
 }
 
+
+sourceSets {
+    main {
+        java {
+            exclude 'org/example2/solips/ClientFeatureToggle.java'
+            exclude 'org/example2/solips/EnchantScreenObserver.java'
+            exclude 'org/example2/solips/EnchantSeedCracker.java'
+            exclude 'org/example2/solips/ManualResetKeyHandler.java'
+            exclude 'org/example2/solips/MultiItemPreviewOverlay.java'
+            exclude 'org/example2/solips/SolipsClient.java'
+        }
+    }
+}
+
 repositories {
     // Add repositories to retrieve artifacts from in here.
     // You should only use this when depending on other mods because
@@ -48,12 +62,22 @@ processResources {
     inputs.property "version", project.version
     inputs.property "minecraft_version", project.minecraft_version
     inputs.property "loader_version", project.loader_version
+    inputs.property "mod_id", project.mod_id
+    inputs.property "mod_name", project.mod_name
+    inputs.property "mod_description", project.mod_description
+    inputs.property "authors", project.authors
+    inputs.property "license", project.license
     filteringCharset "UTF-8"
 
     filesMatching("fabric.mod.json") {
         expand "version": project.version,
                 "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
+                "loader_version": project.loader_version,
+                "mod_id": project.mod_id,
+                "mod_name": project.mod_name,
+                "mod_description": project.mod_description,
+                "authors": project.authors,
+                "license": project.license
     }
 }
 
@@ -81,7 +105,7 @@ java {
 }
 
 jar {
-    from("LICENSE") {
+    from("LICENSE.txt") {
         rename { "${it}_${project.archives_base_name}" }
     }
 }
@@ -95,11 +119,7 @@ publishing {
         }
     }
 
-    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
     repositories {
-        // Add repositories to publish to here.
-        // Notice: This block does NOT have the same function as the block in the top level.
-        // The repositories here will be used for publishing your artifact, not for
-        // retrieving dependencies.
+        // publish repositories can be added here
     }
 }

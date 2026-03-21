@@ -1,0 +1,15 @@
+If you overwrite-extracted this zip onto an existing folder, old files under src/main/java are NOT deleted automatically.
+
+Do one of these:
+1. Best: delete the old fabricwaa folder completely, then extract this zip fresh.
+2. Or: run cleanup_stale_main_client_files.bat in the project root before .\gradlew.bat runClient
+
+Files that must NOT remain under src/main/java/org/example2/solips:
+- EnchantScreenObserver.java
+- ManualResetKeyHandler.java
+- MultiItemPreviewOverlay.java
+- ClientFeatureToggle.java
+- SolipsClient.java
+- EnchantSeedCracker.java
+
+Those files belong in src/client/java/org/example2/solips.

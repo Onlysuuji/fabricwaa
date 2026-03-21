@@ -1,0 +1,11 @@
+このZIPでは build.gradle 側で、src/main/java に残ってしまった client 専用ファイルを main コンパイル対象から除外しています。
+
+そのため、古いフォルダに上書きしてしまって以下が残っていても compileJava で落ちにくくなっています。
+- EnchantScreenObserver.java
+- EnchantSeedCracker.java
+- ManualResetKeyHandler.java
+- MultiItemPreviewOverlay.java
+- ClientFeatureToggle.java
+- SolipsClient.java
+
+それでも安全なのは「新しい空フォルダへ展開」です。

@@ -33,6 +33,7 @@ public final class SeedCrackState {
     private static volatile boolean stopwatchRunning = false;
     private static volatile boolean stopwatchFinished = false;
     private static volatile boolean clueFilterInitialized = false;
+    private static volatile boolean costSearchInitialized = false;
 
     private static final List<ObservationRecord> appliedObservations = new ArrayList<>();
     private static final ArrayDeque<ObservationRecord> queuedObservations = new ArrayDeque<>();
@@ -58,6 +59,7 @@ public final class SeedCrackState {
         costMatched = 0;
         trackedEnchantSeed = UNKNOWN_ENCHANT_SEED;
         clueFilterInitialized = false;
+        costSearchInitialized = false;
         appliedObservations.clear();
         queuedObservations.clear();
         observationKeys.clear();
@@ -216,6 +218,27 @@ public final class SeedCrackState {
         matched = finalCandidates.length == 0 ? currentMatched : finalCandidates.length;
     }
 
+    public static synchronized void setCostRefilterProgress(int processed, int total, int currentMatched, int expectedEpoch) {
+        if (expectedEpoch != resetEpoch) {
+            return;
+        }
+        phase = Phase.COST_SCAN;
+        checked = processed;
+        phaseTotal = total;
+        costMatched = currentMatched;
+        matched = finalCandidates.length == 0 ? currentMatched : finalCandidates.length;
+    }
+
+    public static synchronized void beginCluePhase(int total, int expectedEpoch) {
+        if (expectedEpoch != resetEpoch) {
+            return;
+        }
+        phase = Phase.CLUE_FILTER;
+        checked = 0L;
+        phaseTotal = total;
+        matched = finalCandidates.length;
+    }
+
     public static synchronized void replaceCostCandidates(int[] candidates, int expectedEpoch) {
         if (expectedEpoch != resetEpoch) {
             return;
@@ -245,6 +268,16 @@ public final class SeedCrackState {
         return clueFilterInitialized;
     }
 
+    public static synchronized boolean isCostSearchInitialized() {
+        return costSearchInitialized;
+    }
+
+    public static synchronized void markCostSearchInitialized(int expectedEpoch) {
+        if (expectedEpoch == resetEpoch) {
+            costSearchInitialized = true;
+        }
+    }
+
     public static synchronized void markClueFilterInitialized(int expectedEpoch) {
         if (expectedEpoch == resetEpoch) {
             clueFilterInitialized = true;
@@ -257,9 +290,6 @@ public final class SeedCrackState {
         }
         finalCandidates = new int[0];
         matched = 0;
-        phase = Phase.CLUE_FILTER;
-        checked = 0L;
-        phaseTotal = costCandidates.length;
     }
 
     public static synchronized void setClueFilterProgress(int processed, int total, int currentMatched, int expectedEpoch) {

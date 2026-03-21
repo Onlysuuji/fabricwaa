@@ -1,0 +1,12 @@
+Root cause found from the user's log:
+- Observed record was bookshelves=14 with costs [5,11,30].
+- In vanilla 1.21.1, slot 3 cost 30 implies 15 bookshelves, so 14 is impossible.
+- Therefore the first observation was poisoned by wrong bookshelf detection, making full cost scan end with 0 matches.
+- After that, later observations only refiltered an empty candidate set.
+
+Fixes:
+1) Bookshelf counting now uses vanilla EnchantingTableBlock.POWER_PROVIDER_OFFSETS and
+   EnchantingTableBlock.canAccessPowerProvider instead of the custom counter.
+2) Added a safety correction: if observed slot 3 cost is 30 but computed bookshelves < 15,
+   it corrects bookshelves to 15 and logs [bookshelf-corrected].
+3) Cleaned build.gradle duplicate publishing/sourceSets block.
