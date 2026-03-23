@@ -51,6 +51,12 @@ public final class EnchantScreenObserver {
     }
 
     public static void clearClientObservationState() {
+        clearOpenScreenObservationState();
+        wasInEnchantScreen = false;
+        activeEnchantTablePos = null;
+    }
+
+    private static void clearOpenScreenObservationState() {
         ObservedEnchantState.clear();
         pendingKey = null;
         pendingTicks = 0;
@@ -59,8 +65,6 @@ public final class EnchantScreenObserver {
         waitingForFreshMenuAfterItemChange = false;
         itemChangeBaselineMenuFingerprint = null;
         itemChangeWaitTicks = 0;
-        wasInEnchantScreen = false;
-        activeEnchantTablePos = null;
         lastDropPressed = false;
         lastSprinting = false;
         lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
@@ -102,7 +106,7 @@ public final class EnchantScreenObserver {
         updatePredictionInvalidationTriggers(client);
         if (enchantSeedReset) {
             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
-            clearClientObservationState();
+            clearOpenScreenObservationState();
             wasInEnchantScreen = true;
             return;
         }
@@ -117,7 +121,7 @@ public final class EnchantScreenObserver {
 
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
-            clearClientObservationState();
+            clearOpenScreenObservationState();
             return;
         }
 
@@ -166,7 +170,6 @@ public final class EnchantScreenObserver {
 
         Integer resolvedBookshelves = resolveBookshelves(client, menu);
         if (resolvedBookshelves == null) {
-            clearClientObservationState();
             return;
         }
 
