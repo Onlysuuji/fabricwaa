@@ -10,13 +10,9 @@ import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.EnchantmentScreenHandler;
-import net.minecraft.screen.Property;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.random.Random;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -43,10 +39,6 @@ public final class EnchantSeedCracker {
 
     private static volatile Thread worker;
     private static volatile int workerEpoch = Integer.MIN_VALUE;
-
-    private static volatile Method reflectedGenerateEnchantments;
-    private static volatile Field reflectedSeedField;
-    private static volatile Field reflectedRandomField;
 
     private static final ThreadLocal<Random> COST_RANDOM = ThreadLocal.withInitial(() -> Random.create(0L));
     private static final ThreadLocal<ScratchMenuHolder> SCRATCH_MENU = ThreadLocal.withInitial(ScratchMenuHolder::new);
@@ -634,17 +626,7 @@ public final class EnchantSeedCracker {
     }
 
     private static DynamicRegistryManager getRegistryManager() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.world != null) {
-            return client.world.getRegistryManager();
-        }
-        if (client.isIntegratedServerRunning() && client.getServer() != null) {
-            ServerPlayerEntity serverPlayer = client.player == null ? null : client.getServer().getPlayerManager().getPlayer(client.player.getUuid());
-            if (serverPlayer != null) {
-                return serverPlayer.getWorld().getRegistryManager();
-            }
-        }
-        return null;
+        return EnchantmentScreenHandlerUtil.getRegistryManager(MinecraftClient.getInstance());
     }
 
     private static EnchantmentScreenHandler getScratchMenu() {
@@ -652,22 +634,9 @@ public final class EnchantSeedCracker {
     }
 
     private static boolean setMenuSeed(EnchantmentScreenHandler menu, int seed) {
-        try {
-            Field field = reflectedSeedField;
-            if (field == null) {
-                field = EnchantmentScreenHandler.class.getDeclaredField("seed");
-                field.setAccessible(true);
-                reflectedSeedField = field;
-            }
-            Property property = (Property) field.get(menu);
-            property.set(seed);
-            return true;
-        } catch (ReflectiveOperationException e) {
-            return false;
-        }
+        return EnchantmentScreenHandlerUtil.setMenuSeed(menu, seed);
     }
 
-    @SuppressWarnings("unchecked")
     private static List<EnchantmentLevelEntry> generateEnchantments(
             EnchantmentScreenHandler menu,
             DynamicRegistryManager registryManager,
@@ -675,41 +644,11 @@ public final class EnchantSeedCracker {
             int slot,
             int cost
     ) {
-        try {
-            Method method = reflectedGenerateEnchantments;
-            if (method == null) {
-                method = EnchantmentScreenHandler.class.getDeclaredMethod(
-                        "generateEnchantments",
-                        DynamicRegistryManager.class,
-                        ItemStack.class,
-                        int.class,
-                        int.class
-                );
-                method.setAccessible(true);
-                reflectedGenerateEnchantments = method;
-            }
-            return (List<EnchantmentLevelEntry>) method.invoke(menu, registryManager, stack, slot, cost);
-        } catch (ReflectiveOperationException e) {
-            return null;
-        }
+        return EnchantmentScreenHandlerUtil.generateEnchantments(menu, registryManager, stack, slot, cost);
     }
 
     private static EnchantmentLevelEntry pickDisplayedClue(EnchantmentScreenHandler menu, List<EnchantmentLevelEntry> list) {
-        if (list.isEmpty()) {
-            return null;
-        }
-        try {
-            Field field = reflectedRandomField;
-            if (field == null) {
-                field = EnchantmentScreenHandler.class.getDeclaredField("random");
-                field.setAccessible(true);
-                reflectedRandomField = field;
-            }
-            Random random = (Random) field.get(menu);
-            return list.get(random.nextInt(list.size()));
-        } catch (ReflectiveOperationException e) {
-            return list.get(0);
-        }
+        return EnchantmentScreenHandlerUtil.pickDisplayedClue(menu, list);
     }
 
     private static void logObservationSummary(ObservationRecord record) {

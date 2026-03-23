@@ -15,7 +15,6 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
-import java.lang.reflect.Field;
 import java.util.Arrays;
 
 public final class EnchantScreenObserver {
@@ -29,8 +28,6 @@ public final class EnchantScreenObserver {
     private static boolean wasInEnchantScreen = false;
     private static String pendingKey = null;
     private static int pendingTicks = 0;
-    private static volatile Field reflectedContextField;
-
     private static BlockPos lastLookedEnchantTablePos = null;
     private static long lastLookedEnchantTableTick = Long.MIN_VALUE;
     private static BlockPos activeEnchantTablePos = null;
@@ -258,38 +255,20 @@ public final class EnchantScreenObserver {
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
-        try {
-            ScreenHandlerContext context = (ScreenHandlerContext) getContextField().get(menu);
-            if (context == null) {
-                return null;
-            }
-            Integer value = context.get((world, pos) -> pos == null ? -1 : countBookshelvesAtTable(world, pos), -1);
-            return value != null && value >= 0 ? value : null;
-        } catch (ReflectiveOperationException e) {
+        ScreenHandlerContext context = EnchantmentScreenHandlerUtil.getContext(menu);
+        if (context == null) {
             return null;
         }
+        Integer value = context.get((world, pos) -> pos == null ? -1 : countBookshelvesAtTable(world, pos), -1);
+        return value != null && value >= 0 ? value : null;
     }
 
     private static BlockPos tryResolveMenuTablePos(EnchantmentScreenHandler menu) {
-        try {
-            ScreenHandlerContext context = (ScreenHandlerContext) getContextField().get(menu);
-            if (context == null) {
-                return null;
-            }
-            return context.get((world, pos) -> pos == null ? null : pos.toImmutable(), null);
-        } catch (ReflectiveOperationException e) {
+        ScreenHandlerContext context = EnchantmentScreenHandlerUtil.getContext(menu);
+        if (context == null) {
             return null;
         }
-    }
-
-    private static Field getContextField() throws NoSuchFieldException {
-        Field field = reflectedContextField;
-        if (field == null) {
-            field = EnchantmentScreenHandler.class.getDeclaredField("context");
-            field.setAccessible(true);
-            reflectedContextField = field;
-        }
-        return field;
+        return context.get((world, pos) -> pos == null ? null : pos.toImmutable(), null);
     }
 
     private static Integer tryResolveNearbyClientBookshelves(MinecraftClient client) {

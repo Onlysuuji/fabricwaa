@@ -20,4 +20,8 @@
     "java": ">=21",
     "fabric-api": "*"
   }
+,
+  "mixins": [
+    "solips.client.mixins.json"
+  ]
 }
