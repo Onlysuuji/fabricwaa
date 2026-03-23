@@ -122,6 +122,7 @@ public final class EnchantScreenObserver {
             return;
         }
 
+
         if (lastSeenItem != stack.getItem()) {
             lastSeenItem = stack.getItem();
             waitingForFreshMenuAfterItemChange = true;
