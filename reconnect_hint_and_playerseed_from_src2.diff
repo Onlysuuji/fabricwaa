@@ -1,0 +1,77 @@
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -38,6 +38,7 @@
+     private static int itemChangeWaitTicks = 0;
+     private static boolean lastDropPressed = false;
+     private static boolean lastSprinting = false;
++    private static int lastSubmittedSolvedEpoch = Integer.MIN_VALUE;
+ 
+     private EnchantScreenObserver() {
+     }
+@@ -61,6 +62,8 @@
+         itemChangeWaitTicks = 0;
+         wasInEnchantScreen = false;
+         activeEnchantTablePos = null;
++        lastDropPressed = false;
++        lastSprinting = false;
+     }
+ 
+     private static void onClientTick(MinecraftClient client) {
+@@ -97,6 +100,12 @@
+             wasInEnchantScreen = true;
+             return;
+         }
++
++        updatePredictionInvalidationTriggers(client);
++        if (currentEnchantSeed != null) {
++            SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
++        }
++        submitSolvedXpSeedToPredictor();
+ 
+         ItemStack stack = menu.getSlot(0).getStack();
+         if (stack.isEmpty()) {
+@@ -180,6 +189,18 @@
+         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
+     }
+ 
++    private static void submitSolvedXpSeedToPredictor() {
++        if (!SeedCrackState.isSolved()) {
++            return;
++        }
++        int currentEpoch = SeedCrackState.getResetEpoch();
++        if (currentEpoch == lastSubmittedSolvedEpoch) {
++            return;
++        }
++        lastSubmittedSolvedEpoch = currentEpoch;
++        PlayerSeedPredictState.observeXpSeed(SeedCrackState.getSolvedSeed());
++    }
++
+     private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
+         boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
+         if (dropPressed && !lastDropPressed) {
+@@ -213,15 +234,6 @@
+         }
+     }
+ 
+-    private static Integer getObservedMenuEnchantSeed(MinecraftClient client) {
+-        if (client.player == null) {
+-            return null;
+-        }
+-        if (client.player.currentScreenHandler instanceof EnchantmentScreenHandler menu) {
+-            return menu.getSeed();
+-        }
+-        return null;
+-    }
+ 
+     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
+         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
+--- a/src/client/java/org/example2/solips/SolipsClient.java
++++ b/src/client/java/org/example2/solips/SolipsClient.java
+@@ -12,7 +12,6 @@
+         ManualResetKeyHandler.initialize();
+         EnchantScreenObserver.initialize();
+         MultiItemPreviewOverlay.initialize();
+-        EnchantHintHudRenderer.initialize();
+         LOGGER.info("Initialized Fabric port of {}", Solips.MOD_ID);
+     }
+ }

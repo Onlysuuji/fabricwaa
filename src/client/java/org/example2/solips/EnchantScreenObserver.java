@@ -10,7 +10,6 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.EnchantmentScreenHandler;
 import net.minecraft.screen.ScreenHandlerContext;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
@@ -37,6 +36,9 @@ public final class EnchantScreenObserver {
     private static boolean waitingForFreshMenuAfterItemChange = false;
     private static String itemChangeBaselineMenuFingerprint = null;
     private static int itemChangeWaitTicks = 0;
+    private static boolean lastDropPressed = false;
+    private static boolean lastSprinting = false;
+    private static int lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
 
     private EnchantScreenObserver() {
     }
@@ -60,6 +62,9 @@ public final class EnchantScreenObserver {
         itemChangeWaitTicks = 0;
         wasInEnchantScreen = false;
         activeEnchantTablePos = null;
+        lastDropPressed = false;
+        lastSprinting = false;
+        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -71,14 +76,6 @@ public final class EnchantScreenObserver {
             if (wasInEnchantScreen || pendingKey != null || ObservedEnchantState.snapshot() != null) {
                 clearClientObservationState();
             }
-            return;
-        }
-
-        Integer currentEnchantSeed = getAuthoritativeEnchantSeed(client);
-        if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
-            System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
-            clearClientObservationState();
-            wasInEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
             return;
         }
 
@@ -97,7 +94,27 @@ public final class EnchantScreenObserver {
             return;
         }
 
-        SeedCrackState.setHintFilterFromSeed(menu.getSeed());
+        Integer currentEnchantSeed = menu.getSeed();
+        boolean enchantSeedReset = false;
+        if (currentEnchantSeed != null) {
+            enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
+            SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
+        }
+        updatePredictionInvalidationTriggers(client);
+        if (enchantSeedReset) {
+            System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+            clearClientObservationState();
+            wasInEnchantScreen = true;
+            return;
+        }
+
+        if (SeedCrackState.isSolved()) {
+            int solvedEnchantSeed = SeedCrackState.getSolvedSeed();
+            if (lastObservedSolvedEnchantSeed != solvedEnchantSeed) {
+                PlayerSeedPredictState.observeXpSeed(solvedEnchantSeed);
+                lastObservedSolvedEnchantSeed = solvedEnchantSeed;
+            }
+        }
 
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
@@ -181,6 +198,20 @@ public final class EnchantScreenObserver {
         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
     }
 
+    private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
+        boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
+        if (dropPressed && !lastDropPressed) {
+            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("drop");
+        }
+        lastDropPressed = dropPressed;
+
+        boolean sprinting = client.player != null && client.player.isSprinting();
+        if (sprinting && !lastSprinting) {
+            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("sprint");
+        }
+        lastSprinting = sprinting;
+    }
+
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {
         return costs[0] + "," + costs[1] + "," + costs[2] + "|"
                 + clueIds[0] + "," + clueIds[1] + "," + clueIds[2] + "|"
@@ -200,30 +231,7 @@ public final class EnchantScreenObserver {
         }
     }
 
-    private static Integer getAuthoritativeEnchantSeed(MinecraftClient client) {
-        if (client.player == null) {
-            return null;
-        }
-        if (client.isIntegratedServerRunning()) {
-            var server = client.getServer();
-            if (server == null) {
-                return null;
-            }
-            ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
-            if (serverPlayer == null) {
-                return null;
-            }
-            return serverPlayer.getEnchantmentTableSeed();
-        }
-        return client.player.getEnchantmentTableSeed();
-    }
-
     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
-        Integer serverBookshelves = tryResolveServerBookshelves(client);
-        if (serverBookshelves != null) {
-            return serverBookshelves;
-        }
-
         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
         if (menuTablePos != null) {
             activeEnchantTablePos = menuTablePos;
@@ -239,21 +247,6 @@ public final class EnchantScreenObserver {
         }
 
         return tryResolveNearbyClientBookshelves(client);
-    }
-
-    private static Integer tryResolveServerBookshelves(MinecraftClient client) {
-        if (!client.isIntegratedServerRunning() || client.player == null) {
-            return null;
-        }
-        var server = client.getServer();
-        if (server == null) {
-            return null;
-        }
-        ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
-        if (serverPlayer == null || !(serverPlayer.currentScreenHandler instanceof EnchantmentScreenHandler serverMenu)) {
-            return null;
-        }
-        return tryResolveMenuBookshelves(serverMenu);
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {

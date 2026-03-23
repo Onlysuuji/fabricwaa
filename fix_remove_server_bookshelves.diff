@@ -1,0 +1,37 @@
+diff --git a/src/client/java/org/example2/solips/EnchantScreenObserver.java b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -222,11 +222,6 @@ public final class EnchantScreenObserver {
+     }
+ 
+     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
+-        Integer serverBookshelves = tryResolveServerBookshelves(client);
+-        if (serverBookshelves != null) {
+-            return serverBookshelves;
+-        }
+-
+         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
+         if (menuTablePos != null) {
+             activeEnchantTablePos = menuTablePos;
+@@ -246,19 +241,6 @@ public final class EnchantScreenObserver {
+         return tryResolveNearbyClientBookshelves(client);
+     }
+ 
+-    private static Integer tryResolveServerBookshelves(MinecraftClient client) {
+-        if (!client.isIntegratedServerRunning() || client.player == null) {
+-            return null;
+-        }
+-        var server = client.getServer();
+-        if (server == null) {
+-            return null;
+-        }
+-        ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
+-        if (serverPlayer == null || !(serverPlayer.currentScreenHandler instanceof EnchantmentScreenHandler serverMenu)) {
+-            return null;
+-        }
+-        return tryResolveMenuBookshelves(serverMenu);
+-    }
+-
+     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
+         ScreenHandlerContext context = EnchantmentScreenHandlerUtil.getContext(menu);
+         if (context == null) {

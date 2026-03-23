@@ -12,7 +12,6 @@ public final class SolipsClient implements ClientModInitializer {
         ManualResetKeyHandler.initialize();
         EnchantScreenObserver.initialize();
         MultiItemPreviewOverlay.initialize();
-        EnchantHintHudRenderer.initialize();
         LOGGER.info("Initialized Fabric port of {}", Solips.MOD_ID);
     }
 }
