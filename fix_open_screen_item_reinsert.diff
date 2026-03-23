@@ -1,0 +1,54 @@
+--- src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -67,6 +67,18 @@
+         lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
+     }
+ 
++    private static void clearOpenScreenObservationState() {
++        ObservedEnchantState.clear();
++        pendingKey = null;
++        pendingTicks = 0;
++        lastSeenItem = null;
++        lastRawMenuFingerprint = null;
++        waitingForFreshMenuAfterItemChange = false;
++        itemChangeBaselineMenuFingerprint = null;
++        itemChangeWaitTicks = 0;
++        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
++    }
++
+     private static void onClientTick(MinecraftClient client) {
+         if (!(client.currentScreen instanceof EnchantmentScreen)) {
+             updateTableLookHint(client);
+@@ -103,7 +115,7 @@
+         updatePredictionInvalidationTriggers(client);
+         if (enchantSeedReset) {
+             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+-            clearClientObservationState();
++            clearOpenScreenObservationState();
+             wasInEnchantScreen = true;
+             return;
+         }
+@@ -118,7 +130,7 @@
+ 
+         ItemStack stack = menu.getSlot(0).getStack();
+         if (stack.isEmpty()) {
+-            clearClientObservationState();
++            clearOpenScreenObservationState();
+             return;
+         }
+ 
+@@ -247,6 +259,14 @@
+             return countBookshelvesAtTable(client.world, activeEnchantTablePos);
+         }
+ 
++        if (client.world != null
++                && lastLookedEnchantTablePos != null
++                && (client.world.getTime() - lastLookedEnchantTableTick) <= LOOK_HINT_MAX_AGE_TICKS
++                && isValidEnchantTable(client.world, client.player, lastLookedEnchantTablePos)) {
++            activeEnchantTablePos = lastLookedEnchantTablePos;
++            return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
++        }
++
+         return null;
+     }
+ 

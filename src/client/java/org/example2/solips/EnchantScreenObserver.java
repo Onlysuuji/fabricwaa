@@ -2,7 +2,6 @@ package org.example2.solips;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.Blocks;
-import net.minecraft.block.EnchantingTableBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
@@ -238,16 +237,20 @@ public final class EnchantScreenObserver {
             activeEnchantTablePos = menuTablePos;
         }
 
-        Integer clientBookshelves = tryResolveMenuBookshelves(menu);
-        if (clientBookshelves != null) {
-            return clientBookshelves;
-        }
-
         if (client.world != null && activeEnchantTablePos != null && isValidEnchantTable(client.world, client.player, activeEnchantTablePos)) {
             return countBookshelvesAtTable(client.world, activeEnchantTablePos);
         }
 
-        return tryResolveNearbyClientBookshelves(client);
+        if (client.world != null
+                && client.player != null
+                && lastLookedEnchantTablePos != null
+                && (client.world.getTime() - lastLookedEnchantTableTick) <= LOOK_HINT_MAX_AGE_TICKS
+                && isValidEnchantTable(client.world, client.player, lastLookedEnchantTablePos)) {
+            activeEnchantTablePos = lastLookedEnchantTablePos;
+            return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
+        }
+
+        return null;
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
@@ -333,12 +336,49 @@ public final class EnchantScreenObserver {
 
     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
         int count = 0;
-        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
-            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
-                count++;
+        count += countBookshelvesAtHeight(world, tablePos, 0);
+        count += countBookshelvesAtHeight(world, tablePos, 1);
+        return Math.min(count, 15);
+    }
+
+    private static int countBookshelvesAtHeight(World world, BlockPos tablePos, int dy) {
+        int count = 0;
+
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) != 2) {
+                    continue;
+                }
+
+                BlockPos shelfPos = tablePos.add(dx, dy, dz);
+                if (!world.getBlockState(shelfPos).isOf(Blocks.BOOKSHELF)) {
+                    continue;
+                }
+
+                if (canBookshelfPowerTable(world, tablePos, dy, dx, dz)) {
+                    count++;
+                }
             }
         }
-        return Math.min(count, 15);
+
+        return count;
+    }
+
+    private static boolean canBookshelfPowerTable(World world, BlockPos tablePos, int dy, int dx, int dz) {
+        if (Math.abs(dx) == 2 && Math.abs(dz) == 2) {
+            return isPassableGap(world, tablePos.add(dx / 2, dy, dz / 2));
+        }
+        if (Math.abs(dx) == 2) {
+            return isPassableGap(world, tablePos.add(dx / 2, dy, 0));
+        }
+        if (Math.abs(dz) == 2) {
+            return isPassableGap(world, tablePos.add(0, dy, dz / 2));
+        }
+        return false;
+    }
+
+    private static boolean isPassableGap(World world, BlockPos pos) {
+        return world.getBlockState(pos).isAir();
     }
 
     private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {
