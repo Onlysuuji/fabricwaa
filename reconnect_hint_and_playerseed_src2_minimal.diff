@@ -1,0 +1,62 @@
+--- src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -38,6 +38,7 @@
+     private static int itemChangeWaitTicks = 0;
+     private static boolean lastDropPressed = false;
+     private static boolean lastSprinting = false;
++    private static int lastSolvedSeedObservedForPrediction = Integer.MIN_VALUE;
+ 
+     private EnchantScreenObserver() {
+     }
+@@ -61,6 +62,9 @@
+         itemChangeWaitTicks = 0;
+         wasInEnchantScreen = false;
+         activeEnchantTablePos = null;
++        lastDropPressed = false;
++        lastSprinting = false;
++        lastSolvedSeedObservedForPrediction = Integer.MIN_VALUE;
+     }
+ 
+     private static void onClientTick(MinecraftClient client) {
+@@ -74,6 +78,8 @@
+             }
+             return;
+         }
++
++        updatePredictionInvalidationTriggers(client);
+ 
+         boolean inEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
+         if (!inEnchantScreen) {
+@@ -91,11 +97,22 @@
+         }
+ 
+         Integer currentEnchantSeed = menu.getSeed();
++        if (currentEnchantSeed != null) {
++            SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
++        }
+         if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
+             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+             clearClientObservationState();
+             wasInEnchantScreen = true;
+             return;
++        }
++
++        if (SeedCrackState.isSolved()) {
++            int solvedSeed = SeedCrackState.getSolvedSeed();
++            if (solvedSeed != lastSolvedSeedObservedForPrediction) {
++                PlayerSeedPredictState.observeXpSeed(solvedSeed);
++                lastSolvedSeedObservedForPrediction = solvedSeed;
++            }
+         }
+ 
+         ItemStack stack = menu.getSlot(0).getStack();
+--- src/client/java/org/example2/solips/SolipsClient.java
++++ src/client/java/org/example2/solips/SolipsClient.java
+@@ -12,7 +12,6 @@
+         ManualResetKeyHandler.initialize();
+         EnchantScreenObserver.initialize();
+         MultiItemPreviewOverlay.initialize();
+-        EnchantHintHudRenderer.initialize();
+         LOGGER.info("Initialized Fabric port of {}", Solips.MOD_ID);
+     }
+ }

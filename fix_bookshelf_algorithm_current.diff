@@ -1,0 +1,84 @@
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -2,7 +2,6 @@
+ 
+ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+ import net.minecraft.block.Blocks;
+-import net.minecraft.block.EnchantingTableBlock;
+ import net.minecraft.client.MinecraftClient;
+ import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
+ import net.minecraft.entity.player.PlayerEntity;
+@@ -246,7 +245,15 @@
+             return countBookshelvesAtTable(client.world, activeEnchantTablePos);
+         }
+ 
+-        return tryResolveNearbyClientBookshelves(client);
++        if (client.world != null && client.player != null
++                && lastLookedEnchantTablePos != null
++                && (client.world.getTime() - lastLookedEnchantTableTick) <= LOOK_HINT_MAX_AGE_TICKS
++                && isValidEnchantTable(client.world, client.player, lastLookedEnchantTablePos)) {
++            activeEnchantTablePos = lastLookedEnchantTablePos;
++            return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
++        }
++
++        return null;
+     }
+ 
+     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
+@@ -332,12 +339,51 @@
+ 
+     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
+         int count = 0;
+-        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
+-            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
+-                count++;
+-            }
+-        }
++
++        for (int yOffset = 0; yOffset <= 1; yOffset++) {
++            for (int x = -2; x <= 2; x++) {
++                for (int z = -2; z <= 2; z++) {
++                    if (!isOuterBookshelfRing(x, z)) {
++                        continue;
++                    }
++
++                    BlockPos bookshelfPos = tablePos.add(x, yOffset, z);
++                    if (!world.getBlockState(bookshelfPos).isOf(Blocks.BOOKSHELF)) {
++                        continue;
++                    }
++
++                    if (canBookshelfPowerTable(world, tablePos, x, z)) {
++                        count++;
++                    }
++                }
++            }
++        }
++
+         return Math.min(count, 15);
++    }
++
++    private static boolean isOuterBookshelfRing(int x, int z) {
++        return Math.max(Math.abs(x), Math.abs(z)) == 2;
++    }
++
++    private static boolean canBookshelfPowerTable(World world, BlockPos tablePos, int x, int z) {
++        int stepX = Integer.signum(x);
++        int stepZ = Integer.signum(z);
++
++        if (Math.abs(x) == 2 && Math.abs(z) == 2) {
++            return isGapClear(world, tablePos.add(stepX, 0, stepZ));
++        }
++        if (Math.abs(x) == 2) {
++            return isGapClear(world, tablePos.add(stepX, 0, 0));
++        }
++        if (Math.abs(z) == 2) {
++            return isGapClear(world, tablePos.add(0, 0, stepZ));
++        }
++        return false;
++    }
++
++    private static boolean isGapClear(World world, BlockPos pos) {
++        return world.getBlockState(pos).isAir();
+     }
+ 
+     private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {

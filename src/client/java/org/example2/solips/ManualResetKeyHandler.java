@@ -50,6 +50,7 @@ public final class ManualResetKeyHandler {
 
     private static void triggerReset(MinecraftClient client) {
         SeedCrackState.resetAll();
+        PlayerSeedPredictState.resetAll();
         EnchantScreenObserver.clearClientObservationState();
         System.out.println("[manual-reset] cleared by M key");
 
@@ -62,6 +63,7 @@ public final class ManualResetKeyHandler {
         boolean enabled = ClientFeatureToggle.toggle();
         if (!enabled) {
             SeedCrackState.resetAll();
+            PlayerSeedPredictState.resetAll();
             EnchantScreenObserver.clearClientObservationState();
             System.out.println("[toggle] disabled by N key");
         } else {

@@ -1,0 +1,66 @@
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -10,7 +10,6 @@
+ import net.minecraft.item.ItemStack;
+ import net.minecraft.screen.EnchantmentScreenHandler;
+ import net.minecraft.screen.ScreenHandlerContext;
+-import net.minecraft.server.network.ServerPlayerEntity;
+ import net.minecraft.util.hit.BlockHitResult;
+ import net.minecraft.util.math.BlockPos;
+ import net.minecraft.world.World;
+@@ -74,14 +73,6 @@
+             return;
+         }
+ 
+-        Integer currentEnchantSeed = getAuthoritativeEnchantSeed(client);
+-        if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
+-            System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+-            clearClientObservationState();
+-            wasInEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
+-            return;
+-        }
+-
+         boolean inEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
+         if (!inEnchantScreen) {
+             if (wasInEnchantScreen) {
+@@ -97,6 +88,14 @@
+             return;
+         }
+ 
++        Integer currentEnchantSeed = tryGetObservedEnchantSeed(menu);
++        if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
++            System.out.println("[seed-reset] source=menu newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
++            clearClientObservationState();
++            wasInEnchantScreen = true;
++            return;
++        }
++
+         ItemStack stack = menu.getSlot(0).getStack();
+         if (stack.isEmpty()) {
+             clearClientObservationState();
+@@ -198,22 +197,11 @@
+         }
+     }
+ 
+-    private static Integer getAuthoritativeEnchantSeed(MinecraftClient client) {
+-        if (client.player == null) {
++    private static Integer tryGetObservedEnchantSeed(EnchantmentScreenHandler menu) {
++        if (menu == null) {
+             return null;
+         }
+-        if (client.isIntegratedServerRunning()) {
+-            var server = client.getServer();
+-            if (server == null) {
+-                return null;
+-            }
+-            ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
+-            if (serverPlayer == null) {
+-                return null;
+-            }
+-            return serverPlayer.getEnchantmentTableSeed();
+-        }
+-        return client.player.getEnchantmentTableSeed();
++        return menu.getSeed();
+     }
+ 
+     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {

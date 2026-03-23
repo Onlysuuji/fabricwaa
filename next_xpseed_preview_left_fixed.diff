@@ -1,0 +1,182 @@
+diff --git a/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java b/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java
+--- a/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java
++++ b/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java
+@@ -44,11 +44,11 @@
+     private static final int GRID_ROWS = 2 + PREVIEW_ITEMS.length;
+     private static final int GRID_WIDTH = GRID_COLUMNS * CELL_WIDTH;
+     private static final int GRID_HEIGHT = GRID_ROWS * CELL_HEIGHT;
++    private static final int GRID_LABEL_GAP = 2;
+ 
+-    private static final String[] headerLabels = new String[] {"0", "0", "0", "0", "0", "0"};
+-    private static final ItemStack[][] previewStacks = new ItemStack[1 + PREVIEW_ITEMS.length][PREVIEW_COLUMN_COUNT];
++    private static final PreviewGridCache CURRENT_GRID_CACHE = new PreviewGridCache();
++    private static final PreviewGridCache NEXT_GRID_CACHE = new PreviewGridCache();
+ 
+-    private static int cachedGridSeed = Integer.MIN_VALUE;
+     private static boolean initialized = false;
+ 
+     private static final ThreadLocal<ScratchMenuHolder> SCRATCH_MENU = ThreadLocal.withInitial(ScratchMenuHolder::new);
+@@ -73,9 +73,7 @@
+ 
+         renderLeftHud(client, drawContext, client.textRenderer);
+ 
+-        if (SeedCrackState.isSolved()) {
+-            renderRightTopGrid(client, drawContext, client.textRenderer);
+-        }
++        renderRightTopGrids(client, drawContext, client.textRenderer);
+     }
+ 
+     private static void renderLeftHud(MinecraftClient client, DrawContext drawContext, TextRenderer font) {
+@@ -138,28 +136,46 @@
+         }
+     }
+ 
+-    private static void renderRightTopGrid(MinecraftClient client, DrawContext drawContext, TextRenderer font) {
+-        rebuildPreviewCacheIfNeeded(client);
++    private static void renderRightTopGrids(MinecraftClient client, DrawContext drawContext, TextRenderer font) {
++        boolean hasCurrent = SeedCrackState.isSolved();
++        boolean hasNext = PlayerSeedPredictState.isPredicting();
++        if (!hasCurrent && !hasNext) {
++            return;
++        }
++
++        int startY = GRID_MARGIN + font.fontHeight + GRID_LABEL_GAP;
++        int currentStartX = client.getWindow().getScaledWidth() - GRID_WIDTH - GRID_MARGIN;
+ 
+-        int startX = client.getWindow().getScaledWidth() - GRID_WIDTH - GRID_MARGIN;
+-        int startY = GRID_MARGIN;
++        if (hasCurrent) {
++            rebuildPreviewCacheIfNeeded(client, SeedCrackState.getSolvedSeed(), CURRENT_GRID_CACHE);
++            renderGrid(drawContext, font, currentStartX, startY, "current", CURRENT_GRID_CACHE);
++        }
++
++        if (hasNext) {
++            int nextStartX = hasCurrent ? currentStartX - GRID_WIDTH - GRID_MARGIN : currentStartX;
++            rebuildPreviewCacheIfNeeded(client, PlayerSeedPredictState.getPredictedNextXpSeed(), NEXT_GRID_CACHE);
++            renderGrid(drawContext, font, nextStartX, startY, "next", NEXT_GRID_CACHE);
++        }
++    }
+ 
++    private static void renderGrid(DrawContext drawContext, TextRenderer font, int startX, int startY, String label, PreviewGridCache cache) {
++        drawContext.drawText(font, label, startX, startY - font.fontHeight - GRID_LABEL_GAP, 0xFFFFFF, false);
+         drawCentered(drawContext, font, "", startX, startY, CELL_WIDTH, CELL_HEIGHT, 0xFFFFFF);
+         for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
+-            drawCentered(drawContext, font, headerLabels[col], startX + CELL_WIDTH * (col + 1), startY, CELL_WIDTH, CELL_HEIGHT, 0xFFFFFF);
++            drawCentered(drawContext, font, cache.headerLabels[col], startX + CELL_WIDTH * (col + 1), startY, CELL_WIDTH, CELL_HEIGHT, 0xFFFFFF);
+         }
+ 
+-        renderPreviewRow(drawContext, startX, startY + CELL_HEIGHT, REFERENCE_ITEM, 0);
++        renderPreviewRow(drawContext, startX, startY + CELL_HEIGHT, REFERENCE_ITEM, 0, cache);
+         for (int row = 0; row < PREVIEW_ITEMS.length; row++) {
+-            renderPreviewRow(drawContext, startX, startY + (row + 2) * CELL_HEIGHT, PREVIEW_ITEMS[row], row + 1);
++            renderPreviewRow(drawContext, startX, startY + (row + 2) * CELL_HEIGHT, PREVIEW_ITEMS[row], row + 1, cache);
+         }
+     }
+ 
+-    private static void renderPreviewRow(DrawContext drawContext, int startX, int y, Item rowItem, int cacheRowIndex) {
++    private static void renderPreviewRow(DrawContext drawContext, int startX, int y, Item rowItem, int cacheRowIndex, PreviewGridCache cache) {
+         drawContext.drawItem(new ItemStack(rowItem), startX + 3, y + 2);
+ 
+         for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
+-            ItemStack stack = previewStacks[cacheRowIndex][col];
++            ItemStack stack = cache.previewStacks[cacheRowIndex][col];
+             if (stack == null || stack.isEmpty()) {
+                 continue;
+             }
+@@ -167,44 +183,39 @@
+         }
+     }
+ 
+-    private static void rebuildPreviewCacheIfNeeded(MinecraftClient client) {
+-        int solvedSeed = SeedCrackState.getSolvedSeed();
+-        if (cachedGridSeed == solvedSeed) {
++    private static void rebuildPreviewCacheIfNeeded(MinecraftClient client, int seed, PreviewGridCache cache) {
++        if (cache.cachedSeed == seed) {
+             return;
+         }
+ 
+-        cachedGridSeed = solvedSeed;
+-        fillHeaderLabels(solvedSeed);
+-        fillPreviewRow(client, solvedSeed, REFERENCE_ITEM, 0);
++        cache.cachedSeed = seed;
++        fillHeaderLabels(seed, cache);
++        fillPreviewRow(client, seed, REFERENCE_ITEM, 0, cache);
+         for (int i = 0; i < PREVIEW_ITEMS.length; i++) {
+-            fillPreviewRow(client, solvedSeed, PREVIEW_ITEMS[i], i + 1);
++            fillPreviewRow(client, seed, PREVIEW_ITEMS[i], i + 1, cache);
+         }
+     }
+ 
+     private static void clearPreviewCache() {
+-        cachedGridSeed = Integer.MIN_VALUE;
+-        for (int row = 0; row < previewStacks.length; row++) {
+-            for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
+-                previewStacks[row][col] = ItemStack.EMPTY;
+-            }
+-        }
++        CURRENT_GRID_CACHE.clear();
++        NEXT_GRID_CACHE.clear();
+     }
+ 
+-    private static void fillHeaderLabels(int seed) {
++    private static void fillHeaderLabels(int seed, PreviewGridCache cache) {
+         int[] bookshelves0 = calculateSlotCosts(seed, 0, new ItemStack(REFERENCE_ITEM));
+         int[] bookshelves15 = calculateSlotCosts(seed, 15, new ItemStack(REFERENCE_ITEM));
+ 
+         for (int slot = 0; slot < 3; slot++) {
+-            headerLabels[slot] = Integer.toString(bookshelves0[slot]);
+-            headerLabels[slot + 3] = Integer.toString(bookshelves15[slot]);
++            cache.headerLabels[slot] = Integer.toString(bookshelves0[slot]);
++            cache.headerLabels[slot + 3] = Integer.toString(bookshelves15[slot]);
+         }
+     }
+ 
+-    private static void fillPreviewRow(MinecraftClient client, int seed, Item item, int rowIndex) {
++    private static void fillPreviewRow(MinecraftClient client, int seed, Item item, int rowIndex, PreviewGridCache cache) {
+         for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
+             int bookshelves = col < 3 ? 0 : 15;
+             int slot = col % 3;
+-            previewStacks[rowIndex][col] = buildPreviewStack(client, seed, item, bookshelves, slot);
++            cache.previewStacks[rowIndex][col] = buildPreviewStack(client, seed, item, bookshelves, slot);
+         }
+     }
+@@ -267,6 +278,25 @@
+         drawContext.drawText(font, text, drawX, drawY, color, false);
+     }
+ 
++    private static final class PreviewGridCache {
++        private final String[] headerLabels = new String[] {"0", "0", "0", "0", "0", "0"};
++        private final ItemStack[][] previewStacks = new ItemStack[1 + PREVIEW_ITEMS.length][PREVIEW_COLUMN_COUNT];
++        private int cachedSeed = Integer.MIN_VALUE;
++
++        private PreviewGridCache() {
++            clear();
++        }
++
++        private void clear() {
++            cachedSeed = Integer.MIN_VALUE;
++            for (int row = 0; row < previewStacks.length; row++) {
++                for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
++                    previewStacks[row][col] = ItemStack.EMPTY;
++                }
++            }
++        }
++    }
++
+     private static final class ScratchMenuHolder {
+         private EnchantmentScreenHandler menu;
+ 
+diff --git a/src/main/java/org/example2/solips/PlayerSeedPredictState.java b/src/main/java/org/example2/solips/PlayerSeedPredictState.java
+--- a/src/main/java/org/example2/solips/PlayerSeedPredictState.java
++++ b/src/main/java/org/example2/solips/PlayerSeedPredictState.java
+@@ -150,6 +150,10 @@
+         return formatSeed(predictedNextXpSeed);
+     }
+ 
++    public static int getPredictedNextXpSeed() {
++        return predictedNextXpSeed;
++    }
++
+     public static String getInvalidationReason() {
+         return invalidationReason == null ? "" : invalidationReason;
+     }

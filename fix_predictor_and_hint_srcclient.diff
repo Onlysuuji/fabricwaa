@@ -1,0 +1,58 @@
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -38,6 +38,7 @@
+     private static int itemChangeWaitTicks = 0;
+     private static boolean lastDropPressed = false;
+     private static boolean lastSprinting = false;
++    private static int lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
+ 
+     private EnchantScreenObserver() {
+     }
+@@ -63,6 +64,7 @@
+         activeEnchantTablePos = null;
+         lastDropPressed = false;
+         lastSprinting = false;
++        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
+     }
+ 
+     private static void onClientTick(MinecraftClient client) {
+@@ -97,13 +99,21 @@
+         if (currentEnchantSeed != null) {
+             enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
+             SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
+-            PlayerSeedPredictState.observeXpSeed(currentEnchantSeed);
+         }
+         updatePredictionInvalidationTriggers(client);
+         if (enchantSeedReset) {
+             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+             clearClientObservationState();
+             wasInEnchantScreen = true;
++            return;
++        }
++
++        if (SeedCrackState.isSolved()) {
++            int solvedEnchantSeed = SeedCrackState.getSolvedSeed();
++            if (lastObservedSolvedEnchantSeed != solvedEnchantSeed) {
++                PlayerSeedPredictState.observeXpSeed(solvedEnchantSeed);
++                lastObservedSolvedEnchantSeed = solvedEnchantSeed;
++            }
+         }
+ 
+         ItemStack stack = menu.getSlot(0).getStack();
+@@ -221,16 +231,6 @@
+         }
+     }
+ 
+-    private static Integer getObservedMenuEnchantSeed(MinecraftClient client) {
+-        if (client.player == null) {
+-            return null;
+-        }
+-        if (client.player.currentScreenHandler instanceof EnchantmentScreenHandler menu) {
+-            return menu.getSeed();
+-        }
+-        return null;
+-    }
+-
+     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
+         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
+         if (menuTablePos != null) {

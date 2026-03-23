@@ -2,7 +2,6 @@ package org.example2.solips;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.Blocks;
-import net.minecraft.block.EnchantingTableBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
@@ -10,7 +9,6 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.EnchantmentScreenHandler;
 import net.minecraft.screen.ScreenHandlerContext;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
@@ -37,6 +35,9 @@ public final class EnchantScreenObserver {
     private static boolean waitingForFreshMenuAfterItemChange = false;
     private static String itemChangeBaselineMenuFingerprint = null;
     private static int itemChangeWaitTicks = 0;
+    private static boolean lastDropPressed = false;
+    private static boolean lastSprinting = false;
+    private static int lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
 
     private EnchantScreenObserver() {
     }
@@ -50,6 +51,12 @@ public final class EnchantScreenObserver {
     }
 
     public static void clearClientObservationState() {
+        clearOpenScreenObservationState();
+        wasInEnchantScreen = false;
+        activeEnchantTablePos = null;
+    }
+
+    private static void clearOpenScreenObservationState() {
         ObservedEnchantState.clear();
         pendingKey = null;
         pendingTicks = 0;
@@ -58,8 +65,9 @@ public final class EnchantScreenObserver {
         waitingForFreshMenuAfterItemChange = false;
         itemChangeBaselineMenuFingerprint = null;
         itemChangeWaitTicks = 0;
-        wasInEnchantScreen = false;
-        activeEnchantTablePos = null;
+        lastDropPressed = false;
+        lastSprinting = false;
+        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -71,14 +79,6 @@ public final class EnchantScreenObserver {
             if (wasInEnchantScreen || pendingKey != null || ObservedEnchantState.snapshot() != null) {
                 clearClientObservationState();
             }
-            return;
-        }
-
-        Integer currentEnchantSeed = getAuthoritativeEnchantSeed(client);
-        if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
-            System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
-            clearClientObservationState();
-            wasInEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
             return;
         }
 
@@ -97,13 +97,34 @@ public final class EnchantScreenObserver {
             return;
         }
 
-        SeedCrackState.setHintFilterFromSeed(menu.getSeed());
+        Integer currentEnchantSeed = menu.getSeed();
+        boolean enchantSeedReset = false;
+        if (currentEnchantSeed != null) {
+            enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
+            SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
+        }
+        updatePredictionInvalidationTriggers(client);
+        if (enchantSeedReset) {
+            System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+            clearOpenScreenObservationState();
+            wasInEnchantScreen = true;
+            return;
+        }
+
+        if (SeedCrackState.isSolved()) {
+            int solvedEnchantSeed = SeedCrackState.getSolvedSeed();
+            if (lastObservedSolvedEnchantSeed != solvedEnchantSeed) {
+                PlayerSeedPredictState.observeXpSeed(solvedEnchantSeed);
+                lastObservedSolvedEnchantSeed = solvedEnchantSeed;
+            }
+        }
 
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
-            clearClientObservationState();
+            clearOpenScreenObservationState();
             return;
         }
+
 
         if (lastSeenItem != stack.getItem()) {
             lastSeenItem = stack.getItem();
@@ -149,7 +170,6 @@ public final class EnchantScreenObserver {
 
         Integer resolvedBookshelves = resolveBookshelves(client, menu);
         if (resolvedBookshelves == null) {
-            clearClientObservationState();
             return;
         }
 
@@ -181,6 +201,20 @@ public final class EnchantScreenObserver {
         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
     }
 
+    private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
+        boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
+        if (dropPressed && !lastDropPressed) {
+            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("drop");
+        }
+        lastDropPressed = dropPressed;
+
+        boolean sprinting = client.player != null && client.player.isSprinting();
+        if (sprinting && !lastSprinting) {
+            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("sprint");
+        }
+        lastSprinting = sprinting;
+    }
+
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {
         return costs[0] + "," + costs[1] + "," + costs[2] + "|"
                 + clueIds[0] + "," + clueIds[1] + "," + clueIds[2] + "|"
@@ -200,60 +234,26 @@ public final class EnchantScreenObserver {
         }
     }
 
-    private static Integer getAuthoritativeEnchantSeed(MinecraftClient client) {
-        if (client.player == null) {
-            return null;
-        }
-        if (client.isIntegratedServerRunning()) {
-            var server = client.getServer();
-            if (server == null) {
-                return null;
-            }
-            ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
-            if (serverPlayer == null) {
-                return null;
-            }
-            return serverPlayer.getEnchantmentTableSeed();
-        }
-        return client.player.getEnchantmentTableSeed();
-    }
-
     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
-        Integer serverBookshelves = tryResolveServerBookshelves(client);
-        if (serverBookshelves != null) {
-            return serverBookshelves;
-        }
-
         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
         if (menuTablePos != null) {
             activeEnchantTablePos = menuTablePos;
-        }
-
-        Integer clientBookshelves = tryResolveMenuBookshelves(menu);
-        if (clientBookshelves != null) {
-            return clientBookshelves;
         }
 
         if (client.world != null && activeEnchantTablePos != null && isValidEnchantTable(client.world, client.player, activeEnchantTablePos)) {
             return countBookshelvesAtTable(client.world, activeEnchantTablePos);
         }
 
-        return tryResolveNearbyClientBookshelves(client);
-    }
+        if (client.world != null
+                && client.player != null
+                && lastLookedEnchantTablePos != null
+                && (client.world.getTime() - lastLookedEnchantTableTick) <= LOOK_HINT_MAX_AGE_TICKS
+                && isValidEnchantTable(client.world, client.player, lastLookedEnchantTablePos)) {
+            activeEnchantTablePos = lastLookedEnchantTablePos;
+            return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
+        }
 
-    private static Integer tryResolveServerBookshelves(MinecraftClient client) {
-        if (!client.isIntegratedServerRunning() || client.player == null) {
-            return null;
-        }
-        var server = client.getServer();
-        if (server == null) {
-            return null;
-        }
-        ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(client.player.getUuid());
-        if (serverPlayer == null || !(serverPlayer.currentScreenHandler instanceof EnchantmentScreenHandler serverMenu)) {
-            return null;
-        }
-        return tryResolveMenuBookshelves(serverMenu);
+        return null;
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
@@ -339,12 +339,49 @@ public final class EnchantScreenObserver {
 
     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
         int count = 0;
-        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
-            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
-                count++;
+        count += countBookshelvesAtHeight(world, tablePos, 0);
+        count += countBookshelvesAtHeight(world, tablePos, 1);
+        return Math.min(count, 15);
+    }
+
+    private static int countBookshelvesAtHeight(World world, BlockPos tablePos, int dy) {
+        int count = 0;
+
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) != 2) {
+                    continue;
+                }
+
+                BlockPos shelfPos = tablePos.add(dx, dy, dz);
+                if (!world.getBlockState(shelfPos).isOf(Blocks.BOOKSHELF)) {
+                    continue;
+                }
+
+                if (canBookshelfPowerTable(world, tablePos, dy, dx, dz)) {
+                    count++;
+                }
             }
         }
-        return Math.min(count, 15);
+
+        return count;
+    }
+
+    private static boolean canBookshelfPowerTable(World world, BlockPos tablePos, int dy, int dx, int dz) {
+        if (Math.abs(dx) == 2 && Math.abs(dz) == 2) {
+            return isPassableGap(world, tablePos.add(dx / 2, dy, dz / 2));
+        }
+        if (Math.abs(dx) == 2) {
+            return isPassableGap(world, tablePos.add(dx / 2, dy, 0));
+        }
+        if (Math.abs(dz) == 2) {
+            return isPassableGap(world, tablePos.add(0, dy, dz / 2));
+        }
+        return false;
+    }
+
+    private static boolean isPassableGap(World world, BlockPos pos) {
+        return world.getBlockState(pos).isAir();
     }
 
     private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {
