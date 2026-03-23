@@ -1,0 +1,267 @@
+--- a/src/client/java/org/example2/solips/EnchantScreenObserver.java
++++ b/src/client/java/org/example2/solips/EnchantScreenObserver.java
+@@ -37,6 +37,8 @@
+     private static boolean waitingForFreshMenuAfterItemChange = false;
+     private static String itemChangeBaselineMenuFingerprint = null;
+     private static int itemChangeWaitTicks = 0;
++    private static boolean lastDropPressed = false;
++    private static boolean lastSprinting = false;
+ 
+     private EnchantScreenObserver() {
+     }
+@@ -68,13 +70,20 @@
+         }
+ 
+         if (!ClientFeatureToggle.isEnabled()) {
++            lastDropPressed = false;
++            lastSprinting = false;
+             if (wasInEnchantScreen || pendingKey != null || ObservedEnchantState.snapshot() != null) {
+                 clearClientObservationState();
+             }
+             return;
+         }
+ 
++        updatePredictionInvalidationTriggers(client);
++
+         Integer currentEnchantSeed = getAuthoritativeEnchantSeed(client);
++        if (currentEnchantSeed != null) {
++            PlayerSeedPredictState.observeXpSeed(currentEnchantSeed);
++        }
+         if (currentEnchantSeed != null && SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed)) {
+             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
+             clearClientObservationState();
+@@ -179,6 +188,20 @@
+         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
+     }
+ 
++    private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
++        boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
++        if (dropPressed && !lastDropPressed) {
++            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("drop");
++        }
++        lastDropPressed = dropPressed;
++
++        boolean sprinting = client.player != null && client.player.isSprinting();
++        if (sprinting && !lastSprinting) {
++            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("sprint");
++        }
++        lastSprinting = sprinting;
++    }
++
+     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {
+         return costs[0] + "," + costs[1] + "," + costs[2] + "|"
+                 + clueIds[0] + "," + clueIds[1] + "," + clueIds[2] + "|"
+--- a/src/client/java/org/example2/solips/ManualResetKeyHandler.java
++++ b/src/client/java/org/example2/solips/ManualResetKeyHandler.java
+@@ -50,6 +50,7 @@
+ 
+     private static void triggerReset(MinecraftClient client) {
+         SeedCrackState.resetAll();
++        PlayerSeedPredictState.resetAll();
+         EnchantScreenObserver.clearClientObservationState();
+         System.out.println("[manual-reset] cleared by M key");
+ 
+@@ -62,6 +63,7 @@
+         boolean enabled = ClientFeatureToggle.toggle();
+         if (!enabled) {
+             SeedCrackState.resetAll();
++            PlayerSeedPredictState.resetAll();
+             EnchantScreenObserver.clearClientObservationState();
+             System.out.println("[toggle] disabled by N key");
+         } else {
+--- a/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java
++++ b/src/client/java/org/example2/solips/MultiItemPreviewOverlay.java
+@@ -114,10 +114,27 @@
+             drawContext.drawText(font, "bookshelves=" + snapshot.getBookshelves() + " (auto)", left, y, 0xAAAAFF, false);
+             y += font.fontHeight + 2;
+             drawContext.drawText(font, "latest=" + snapshot.getKey(), left, y, 0xAAAAFF, false);
++            y += font.fontHeight + 2;
+         } else {
+             drawContext.drawText(font, "bookshelves=(none)", left, y, 0x888888, false);
+             y += font.fontHeight + 2;
+             drawContext.drawText(font, "latest=(none)", left, y, 0x888888, false);
++            y += font.fontHeight + 2;
++        }
++
++        int predictColor = PlayerSeedPredictState.isPredicting() ? 0x55FF55 : 0xFFAA55;
++        drawContext.drawText(font, "predict=" + PlayerSeedPredictState.getStatusText(), left, y, predictColor, false);
++        y += font.fontHeight + 2;
++        drawContext.drawText(font, "anchorXpSeed=" + PlayerSeedPredictState.getAnchorXpSeedText(), left, y, 0xAAAAFF, false);
++        y += font.fontHeight + 2;
++        drawContext.drawText(font, "lastXpSeed=" + PlayerSeedPredictState.getLastObservedXpSeedText(), left, y, 0xAAAAFF, false);
++        y += font.fontHeight + 2;
++        drawContext.drawText(font, "nextXpSeed=" + PlayerSeedPredictState.getPredictedNextXpSeedText(), left, y,
++                PlayerSeedPredictState.isPredicting() ? 0x55FF55 : 0xFF8888, false);
++        y += font.fontHeight + 2;
++        String predictReason = PlayerSeedPredictState.getInvalidationReason();
++        if (!predictReason.isEmpty()) {
++            drawContext.drawText(font, "predictReason=" + predictReason, left, y, 0xFF8888, false);
+         }
+     }
+ 
+--- a/src/main/java/org/example2/solips/PlayerSeedPredictState.java
++++ b/src/main/java/org/example2/solips/PlayerSeedPredictState.java
+@@ -0,0 +1,163 @@
++package org.example2.solips;
++
++public final class PlayerSeedPredictState {
++    private static final int NONE_SEED = Integer.MIN_VALUE;
++    private static final long MULTIPLIER = 0x5DEECE66DL;
++    private static final long ADDEND = 0xBL;
++    private static final long MASK = (1L << 48) - 1L;
++
++    private enum Status {
++        WAITING_FIRST,
++        WAITING_SECOND,
++        PREDICTING
++    }
++
++    private static volatile Status status = Status.WAITING_FIRST;
++    private static volatile int anchorXpSeed = NONE_SEED;
++    private static volatile int lastObservedXpSeed = NONE_SEED;
++    private static volatile int predictedNextXpSeed = NONE_SEED;
++    private static volatile long currentInternalSeed = 0L;
++    private static volatile long predictedInternalSeed = 0L;
++    private static volatile String invalidationReason = "";
++
++    private PlayerSeedPredictState() {
++    }
++
++    public static synchronized void resetAll() {
++        status = Status.WAITING_FIRST;
++        anchorXpSeed = NONE_SEED;
++        lastObservedXpSeed = NONE_SEED;
++        predictedNextXpSeed = NONE_SEED;
++        currentInternalSeed = 0L;
++        predictedInternalSeed = 0L;
++        invalidationReason = "";
++    }
++
++    public static synchronized void observeXpSeed(int xpSeed) {
++        if (xpSeed == NONE_SEED) {
++            return;
++        }
++        if (lastObservedXpSeed == xpSeed) {
++            return;
++        }
++        lastObservedXpSeed = xpSeed;
++
++        if (status == Status.PREDICTING && predictedNextXpSeed != NONE_SEED) {
++            if (xpSeed == predictedNextXpSeed) {
++                currentInternalSeed = predictedInternalSeed;
++                predictedInternalSeed = nextState(currentInternalSeed);
++                predictedNextXpSeed = outputFromState(predictedInternalSeed);
++                anchorXpSeed = xpSeed;
++                invalidationReason = "";
++                return;
++            }
++
++            invalidatePredictionKeepLastObserved("drift");
++            return;
++        }
++
++        if (status == Status.WAITING_FIRST || anchorXpSeed == NONE_SEED) {
++            anchorXpSeed = xpSeed;
++            status = Status.WAITING_SECOND;
++            predictedNextXpSeed = NONE_SEED;
++            invalidationReason = "";
++            return;
++        }
++
++        Long recovered = recoverInternalStateAfterSecond(anchorXpSeed, xpSeed);
++        if (recovered == null) {
++            anchorXpSeed = xpSeed;
++            status = Status.WAITING_SECOND;
++            predictedNextXpSeed = NONE_SEED;
++            invalidationReason = "recover_failed";
++            currentInternalSeed = 0L;
++            predictedInternalSeed = 0L;
++            return;
++        }
++
++        currentInternalSeed = recovered;
++        predictedInternalSeed = nextState(currentInternalSeed);
++        predictedNextXpSeed = outputFromState(predictedInternalSeed);
++        status = Status.PREDICTING;
++        invalidationReason = "";
++    }
++
++    public static synchronized void invalidatePredictionKeepLastObserved(String reason) {
++        if (status != Status.PREDICTING) {
++            return;
++        }
++        predictedNextXpSeed = NONE_SEED;
++        currentInternalSeed = 0L;
++        predictedInternalSeed = 0L;
++        invalidationReason = reason == null ? "invalidated" : reason;
++        if (lastObservedXpSeed != NONE_SEED) {
++            anchorXpSeed = lastObservedXpSeed;
++            status = Status.WAITING_SECOND;
++        } else {
++            anchorXpSeed = NONE_SEED;
++            status = Status.WAITING_FIRST;
++        }
++    }
++
++    private static Long recoverInternalStateAfterSecond(int firstXpSeed, int secondXpSeed) {
++        long firstUpper = Integer.toUnsignedLong(firstXpSeed) << 16;
++        Long recovered = null;
++
++        for (int low = 0; low <= 0xFFFF; low++) {
++            long stateAfterFirst = firstUpper | (long) low;
++            long stateAfterSecond = nextState(stateAfterFirst);
++            if (((int) (stateAfterSecond >>> 16)) != secondXpSeed) {
++                continue;
++            }
++            if (recovered != null) {
++                return null;
++            }
++            recovered = stateAfterSecond;
++        }
++
++        return recovered;
++    }
++
++    private static long nextState(long state) {
++        return (state * MULTIPLIER + ADDEND) & MASK;
++    }
++
++    private static int outputFromState(long state) {
++        return (int) (state >>> 16);
++    }
++
++    public static boolean isPredicting() {
++        return status == Status.PREDICTING;
++    }
++
++    public static String getStatusText() {
++        return switch (status) {
++            case WAITING_FIRST -> "waiting_first";
++            case WAITING_SECOND -> "waiting_second";
++            case PREDICTING -> "predicting";
++        };
++    }
++
++    public static String getAnchorXpSeedText() {
++        return formatSeed(anchorXpSeed);
++    }
++
++    public static String getLastObservedXpSeedText() {
++        return formatSeed(lastObservedXpSeed);
++    }
++
++    public static String getPredictedNextXpSeedText() {
++        return formatSeed(predictedNextXpSeed);
++    }
++
++    public static String getInvalidationReason() {
++        return invalidationReason == null ? "" : invalidationReason;
++    }
++
++    private static String formatSeed(int value) {
++        if (value == NONE_SEED) {
++            return "none";
++        }
++        return Integer.toUnsignedString(value);
++    }
++}
