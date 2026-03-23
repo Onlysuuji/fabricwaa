@@ -97,6 +97,8 @@ public final class EnchantScreenObserver {
             return;
         }
 
+        SeedCrackState.setHintFilterFromSeed(menu.getSeed());
+
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
             clearClientObservationState();

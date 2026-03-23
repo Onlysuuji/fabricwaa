@@ -26,6 +26,7 @@ public final class EnchantSeedCracker {
     private static final long COST_SCAN_CHUNK_SIZE = 1L << 20;
     private static final int COST_REFILTER_CHUNK_SIZE = 1 << 18;
     private static final int COST_REFILTER_PARALLEL_THRESHOLD = 1 << 17;
+    private static final long HINTED_COST_SCAN_CHUNK_SIZE = 1L << 18;
 
     private static final int CLUE_THREADS = COST_THREADS;
     private static final int CLUE_FILTER_CHUNK_SIZE = 1 << 14;
@@ -243,7 +244,7 @@ public final class EnchantSeedCracker {
 
         if (!SeedCrackState.isCostSearchInitialized()) {
             SeedCrackState.markCostSearchInitialized(expectedEpoch);
-            debugLog("cost-full-start", "epoch=" + expectedEpoch + " total=" + SeedCrackState.TOTAL_SEEDS + " costKey=" + record.getCostKey());
+            debugLog("cost-full-start", "epoch=" + expectedEpoch + " total=" + SeedCrackState.getHintFilteredSeedCount() + " hint=" + (SeedCrackState.hasHintFilter() ? Integer.toHexString(SeedCrackState.getHintFilterValue()) : "none") + " costKey=" + record.getCostKey());
             next = fullCostScan(prepared, expectedEpoch);
             debugLog("cost-full-end", "epoch=" + expectedEpoch + " matched=" + next.length + " costKey=" + record.getCostKey());
         } else {
@@ -262,19 +263,27 @@ public final class EnchantSeedCracker {
 
     private static int[] fullCostScan(PreparedObservation record, int expectedEpoch) {
         IntArrayBuilder matches = new IntArrayBuilder(4096);
+        boolean hinted = SeedCrackState.hasHintFilter();
+        int hint = hinted ? SeedCrackState.getHintFilterValue() : 0;
+        long total = hinted ? SeedCrackState.getHintFilteredSeedCount() : SeedCrackState.TOTAL_SEEDS;
+        long chunkSize = hinted ? HINTED_COST_SCAN_CHUNK_SIZE : COST_SCAN_CHUNK_SIZE;
         long nextStart = 0L;
 
-        while (nextStart < SeedCrackState.TOTAL_SEEDS) {
+        while (nextStart < total) {
             if (SeedCrackState.getResetEpoch() != expectedEpoch) {
                 return new int[0];
             }
 
             List<Future<CostChunkResult>> futures = new ArrayList<>(COST_THREADS);
-            for (int i = 0; i < COST_THREADS && nextStart < SeedCrackState.TOTAL_SEEDS; i++) {
+            for (int i = 0; i < COST_THREADS && nextStart < total; i++) {
                 long start = nextStart;
-                long end = Math.min(start + COST_SCAN_CHUNK_SIZE, SeedCrackState.TOTAL_SEEDS);
+                long end = Math.min(start + chunkSize, total);
                 nextStart = end;
-                futures.add(COST_EXECUTOR.submit(() -> scanCostChunk(record, start, end, expectedEpoch)));
+                if (hinted) {
+                    futures.add(COST_EXECUTOR.submit(() -> scanHintedCostChunk(record, start, end, hint, expectedEpoch)));
+                } else {
+                    futures.add(COST_EXECUTOR.submit(() -> scanCostChunk(record, start, end, expectedEpoch)));
+                }
             }
 
             for (Future<CostChunkResult> future : futures) {
@@ -283,7 +292,7 @@ public final class EnchantSeedCracker {
                     return new int[0];
                 }
                 matches.addAll(chunk.seeds, chunk.size);
-                SeedCrackState.setCostScanProgress(chunk.endCursor, matches.size(), expectedEpoch);
+                SeedCrackState.setCostScanProgress(chunk.endCursor, total, matches.size(), expectedEpoch);
             }
         }
 
@@ -349,6 +358,23 @@ public final class EnchantSeedCracker {
             }
             if (matchesCosts(record, (int) seed, random)) {
                 matches.add((int) seed);
+            }
+        }
+
+        return new CostChunkResult(matches.toArray(), matches.size(), end);
+    }
+
+    private static CostChunkResult scanHintedCostChunk(PreparedObservation record, long start, long end, int hint, int expectedEpoch) {
+        Random random = COST_RANDOM.get();
+        IntArrayBuilder matches = new IntArrayBuilder(256);
+
+        for (long upper = start; upper < end; upper++) {
+            if ((upper & 0x3FFFL) == 0L && SeedCrackState.getResetEpoch() != expectedEpoch) {
+                break;
+            }
+            int seed = (int) ((upper << SeedCrackState.HINT_FILTER_BITS) | (long) hint);
+            if (matchesCosts(record, seed, random)) {
+                matches.add(seed);
             }
         }
 

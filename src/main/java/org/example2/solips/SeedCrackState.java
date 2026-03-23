@@ -16,7 +16,9 @@ public final class SeedCrackState {
     }
 
     public static final long TOTAL_SEEDS = 0x1_0000_0000L;
+    public static final int HINT_FILTER_BITS = 12;
     private static final int UNKNOWN_ENCHANT_SEED = Integer.MIN_VALUE;
+    private static final int UNKNOWN_HINT_FILTER = -1;
 
     private static volatile boolean running = false;
     private static volatile boolean solved = false;
@@ -28,6 +30,7 @@ public final class SeedCrackState {
     private static volatile int costMatched = 0;
     private static volatile int resetEpoch = 0;
     private static volatile int trackedEnchantSeed = UNKNOWN_ENCHANT_SEED;
+    private static volatile int hintFilterValue = UNKNOWN_HINT_FILTER;
     private static volatile long stopwatchStartNanos = 0L;
     private static volatile long stopwatchEndNanos = 0L;
     private static volatile boolean stopwatchRunning = false;
@@ -58,6 +61,7 @@ public final class SeedCrackState {
         matched = 0;
         costMatched = 0;
         trackedEnchantSeed = UNKNOWN_ENCHANT_SEED;
+        hintFilterValue = UNKNOWN_HINT_FILTER;
         clueFilterInitialized = false;
         costSearchInitialized = false;
         appliedObservations.clear();
@@ -113,6 +117,22 @@ public final class SeedCrackState {
         resetAll();
         trackedEnchantSeed = currentEnchantSeed;
         return true;
+    }
+
+    public static synchronized void setHintFilterFromSeed(int seed) {
+        hintFilterValue = seed & ((1 << HINT_FILTER_BITS) - 1);
+    }
+
+    public static synchronized boolean hasHintFilter() {
+        return hintFilterValue != UNKNOWN_HINT_FILTER;
+    }
+
+    public static synchronized int getHintFilterValue() {
+        return hintFilterValue;
+    }
+
+    public static synchronized long getHintFilteredSeedCount() {
+        return hasHintFilter() ? (1L << (32 - HINT_FILTER_BITS)) : TOTAL_SEEDS;
     }
 
     public static synchronized boolean addObservationIfAbsent(ObservationRecord observation) {
@@ -207,13 +227,13 @@ public final class SeedCrackState {
         ensureStopwatchStarted();
     }
 
-    public static synchronized void setCostScanProgress(long newChecked, int currentMatched, int expectedEpoch) {
+    public static synchronized void setCostScanProgress(long newChecked, long total, int currentMatched, int expectedEpoch) {
         if (expectedEpoch != resetEpoch) {
             return;
         }
         phase = Phase.COST_SCAN;
         checked = newChecked;
-        phaseTotal = TOTAL_SEEDS;
+        phaseTotal = total;
         costMatched = currentMatched;
         matched = finalCandidates.length == 0 ? currentMatched : finalCandidates.length;
     }
