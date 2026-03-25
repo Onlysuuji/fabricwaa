@@ -103,6 +103,12 @@ public final class EnchantScreenObserver {
             return;
         }
 
+        if (SeedCrackState.isSolved()) {
+            pendingKey = null;
+            pendingTicks = 0;
+            return;
+        }
+
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
             clearOpenScreenObservationState();
@@ -175,6 +181,15 @@ public final class EnchantScreenObserver {
             return;
         }
 
+        if (isZeroMatchDeadEnd() && !SeedCrackState.hasObservationKey(key)) {
+            System.out.println("[dead-end-reset] restarting from new observation key=" + key);
+            SeedCrackState.resetAll();
+            if (currentEnchantSeed != null) {
+                SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
+                SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
+            }
+        }
+
         System.out.println("[obs-read] bookshelves=" + bookshelves
                 + " costs=" + Arrays.toString(costs)
                 + " clueIds=" + Arrays.toString(clueIds)
@@ -182,6 +197,13 @@ public final class EnchantScreenObserver {
 
         ObservedEnchantState.set(stack.getItem(), bookshelves, costs, clueIds, clueLevels);
         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
+    }
+
+    private static boolean isZeroMatchDeadEnd() {
+        return !SeedCrackState.isRunning()
+                && SeedCrackState.getPhase() == SeedCrackState.Phase.DONE
+                && SeedCrackState.getMatched() == 0
+                && SeedCrackState.getObservationCount() > 0;
     }
 
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {

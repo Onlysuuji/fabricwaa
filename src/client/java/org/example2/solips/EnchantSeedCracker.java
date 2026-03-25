@@ -142,6 +142,10 @@ public final class EnchantSeedCracker {
         if (observation == null) {
             return;
         }
+        if (SeedCrackState.isSolved()) {
+            debugLog("obs-skip", "reason=already_solved key=" + observation.getKey());
+            return;
+        }
         if (!SeedCrackState.addObservationIfAbsent(observation)) {
             debugLog("obs-duplicate", "key=" + observation.getKey());
             return;

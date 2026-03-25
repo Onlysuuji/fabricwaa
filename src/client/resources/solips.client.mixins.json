@@ -3,6 +3,7 @@
   "package": "org.example2.solips.mixin.client",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "BossBarHudAccessor",
     "HandledScreenMixin",
     "EnchantmentScreenHandlerAccessor"
   ],
