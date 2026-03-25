@@ -33,6 +33,7 @@ public final class MultiItemPreviewOverlay {
             Items.IRON_LEGGINGS,
             Items.IRON_BOOTS,
             Items.GOLDEN_BOOTS,
+            Items.BOW,
             Items.BOOK
     };
 
@@ -119,7 +120,14 @@ public final class MultiItemPreviewOverlay {
         }
     }
 
-    private static void renderPreviewRow(DrawContext drawContext, GridCache cache, int startX, int y, Item rowItem, int cacheRowIndex) {
+    private static void renderPreviewRow(
+            DrawContext drawContext,
+            GridCache cache,
+            int startX,
+            int y,
+            Item rowItem,
+            int cacheRowIndex
+    ) {
         drawContext.drawItem(new ItemStack(rowItem), startX + 3, y + 2);
 
         for (int col = 0; col < PREVIEW_COLUMN_COUNT; col++) {
@@ -127,7 +135,9 @@ public final class MultiItemPreviewOverlay {
             if (stack == null || stack.isEmpty()) {
                 continue;
             }
-            drawContext.drawItem(stack, startX + (col + 1) * CELL_WIDTH + 3, y + 2);
+            int itemX = startX + (col + 1) * CELL_WIDTH + 3;
+            int itemY = y + 2;
+            drawContext.drawItem(stack, itemX, itemY);
         }
     }
 

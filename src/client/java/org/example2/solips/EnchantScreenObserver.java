@@ -175,8 +175,7 @@ public final class EnchantScreenObserver {
             return;
         }
 
-        System.out.println("[obs-read] item=" + stack.getItem()
-                + " bookshelves=" + bookshelves
+        System.out.println("[obs-read] bookshelves=" + bookshelves
                 + " costs=" + Arrays.toString(costs)
                 + " clueIds=" + Arrays.toString(clueIds)
                 + " clueLv=" + Arrays.toString(clueLevels));

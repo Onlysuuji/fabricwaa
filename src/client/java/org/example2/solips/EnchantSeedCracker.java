@@ -146,7 +146,7 @@ public final class EnchantSeedCracker {
             debugLog("obs-duplicate", "key=" + observation.getKey());
             return;
         }
-        debugLog("obs-queued", "item=" + observation.getItem() + " bookshelves=" + observation.getBookshelves() + " costs=" + Arrays.toString(observation.getCosts()) + " clueIds=" + Arrays.toString(observation.getClueIds()) + " clueLv=" + Arrays.toString(observation.getClueLevels()));
+        debugLog("obs-queued", "bookshelves=" + observation.getBookshelves() + " costs=" + Arrays.toString(observation.getCosts()) + " clueIds=" + Arrays.toString(observation.getClueIds()) + " clueLv=" + Arrays.toString(observation.getClueLevels()));
         ensureWorkerRunning();
     }
 
@@ -476,7 +476,7 @@ public final class EnchantSeedCracker {
             SeedCrackState.setClueFilterProgress(source.length, Math.max(source.length, 1), source.length, expectedEpoch);
             debugLog("clue-filter-end", "epoch=" + expectedEpoch + " matched=" + source.length + " key=" + record.getKey());
             if (source.length == 0) {
-                debugLog("clue-filter-zero", "epoch=" + expectedEpoch + " item=" + record.getItem() + " bookshelves=" + record.getBookshelves() + " costs=" + Arrays.toString(record.getCosts()) + " clueIds=" + Arrays.toString(record.getClueIds()) + " clueLv=" + Arrays.toString(record.getClueLevels()));
+                debugLog("clue-filter-zero", "epoch=" + expectedEpoch + " bookshelves=" + record.getBookshelves() + " costs=" + Arrays.toString(record.getCosts()) + " clueIds=" + Arrays.toString(record.getClueIds()) + " clueLv=" + Arrays.toString(record.getClueLevels()));
             }
         }
 
@@ -656,8 +656,7 @@ public final class EnchantSeedCracker {
 
     private static void logObservationSummary(ObservationRecord record) {
         StringBuilder sb = new StringBuilder();
-        sb.append("[item-result] item=").append(record.getItem())
-                .append(" bookshelves=").append(record.getBookshelves())
+        sb.append("[item-result] bookshelves=").append(record.getBookshelves())
                 .append(" costs=").append(Arrays.toString(record.getCosts()))
                 .append(" clueIds=").append(Arrays.toString(record.getClueIds()))
                 .append(" clueLv=").append(Arrays.toString(record.getClueLevels()))
