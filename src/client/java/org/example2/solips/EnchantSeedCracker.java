@@ -101,6 +101,11 @@ public final class EnchantSeedCracker {
         void resolveIgnoredSlots(Registry<Enchantment> enchantmentRegistry) {
             Arrays.fill(ignoredSlots, false);
             for (int slot = 0; slot < 3; slot++) {
+                if (itemPath.equals("fishing_rod") && costs[slot] <= 3) {
+                    ignoredSlots[slot] = true;
+                    continue;
+                }
+
                 int observedClueId = clueIds[slot];
                 if (observedClueId < 0) {
                     continue;
@@ -435,24 +440,13 @@ public final class EnchantSeedCracker {
             return false;
         }
 
-        int[] source = SeedCrackState.isClueFilterInitialized()
-                ? SeedCrackState.getFinalCandidatesArraySnapshot(expectedEpoch)
-                : SeedCrackState.getCostCandidatesArraySnapshot(expectedEpoch);
+        int[] source = SeedCrackState.getCostCandidatesArraySnapshot(expectedEpoch);
+        List<ObservationRecord> targets = SeedCrackState.getAppliedObservationsSnapshot();
 
-        List<ObservationRecord> targets = SeedCrackState.isClueFilterInitialized()
-                ? SeedCrackState.getPendingClueObservationsSnapshot(expectedEpoch)
-                : SeedCrackState.getAppliedObservationsSnapshot();
-
-        debugLog("clue-phase-check", "epoch=" + expectedEpoch + " source=" + source.length + " targets=" + targets.size() + " initialized=" + SeedCrackState.isClueFilterInitialized());
+        debugLog("clue-phase-check", "epoch=" + expectedEpoch + " source=" + source.length + " targets=" + targets.size() + " mode=full_replay");
 
         if (source.length <= 1) {
             SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
-            for (ObservationRecord record : targets) {
-                if (!SeedCrackState.hasProcessedClueObservationKey(record.getKey())) {
-                    SeedCrackState.markObservationClueProcessed(record.getKey(), expectedEpoch);
-                }
-            }
-            SeedCrackState.markClueFilterInitialized(expectedEpoch);
             debugLog("clue-skip", "epoch=" + expectedEpoch + " source=" + source.length + " reason=cost_candidates_leq_1");
             return true;
         }
@@ -460,9 +454,6 @@ public final class EnchantSeedCracker {
         for (ObservationRecord record : targets) {
             if (SeedCrackState.getResetEpoch() != expectedEpoch) {
                 return false;
-            }
-            if (SeedCrackState.hasProcessedClueObservationKey(record.getKey())) {
-                continue;
             }
 
             PreparedObservation prepared = new PreparedObservation(record);
@@ -476,18 +467,13 @@ public final class EnchantSeedCracker {
                 return false;
             }
             if (result.interrupted) {
-                if (SeedCrackState.isClueFilterInitialized()) {
-                    SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
-                }
-                debugLog("clue-filter-interrupted", "epoch=" + expectedEpoch + " key=" + record.getKey() + " source=" + source.length);
+                debugLog("clue-filter-interrupted", "epoch=" + expectedEpoch + " key=" + record.getKey() + " source=" + source.length + " reason=reset");
                 return false;
             }
 
             source = result.seeds;
             SeedCrackState.replaceFinalCandidates(source, expectedEpoch);
             SeedCrackState.setClueFilterProgress(source.length, Math.max(source.length, 1), source.length, expectedEpoch);
-            SeedCrackState.markObservationClueProcessed(record.getKey(), expectedEpoch);
-            SeedCrackState.markClueFilterInitialized(expectedEpoch);
             debugLog("clue-filter-end", "epoch=" + expectedEpoch + " matched=" + source.length + " key=" + record.getKey());
             if (source.length == 0) {
                 debugLog("clue-filter-zero", "epoch=" + expectedEpoch + " item=" + record.getItem() + " bookshelves=" + record.getBookshelves() + " costs=" + Arrays.toString(record.getCosts()) + " clueIds=" + Arrays.toString(record.getClueIds()) + " clueLv=" + Arrays.toString(record.getClueLevels()));
@@ -519,9 +505,6 @@ public final class EnchantSeedCracker {
             if (SeedCrackState.getResetEpoch() != expectedEpoch) {
                 return ClueFilterResult.interrupted();
             }
-            if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
-                return ClueFilterResult.interrupted();
-            }
 
             List<Future<SeedBatch>> futures = new ArrayList<>(CLUE_THREADS);
             int submitted = 0;
@@ -537,9 +520,6 @@ public final class EnchantSeedCracker {
             for (Future<SeedBatch> future : futures) {
                 SeedBatch batch = await(future);
                 if (SeedCrackState.getResetEpoch() != expectedEpoch) {
-                    return ClueFilterResult.interrupted();
-                }
-                if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
                     return ClueFilterResult.interrupted();
                 }
                 merged.addAll(batch.seeds, batch.size);
@@ -561,9 +541,6 @@ public final class EnchantSeedCracker {
         IntArrayBuilder next = new IntArrayBuilder(Math.max(16, source.length / 8));
         for (int i = 0; i < source.length; i++) {
             if (SeedCrackState.getResetEpoch() != expectedEpoch) {
-                return ClueFilterResult.interrupted();
-            }
-            if (SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
                 return ClueFilterResult.interrupted();
             }
 
@@ -591,7 +568,7 @@ public final class EnchantSeedCracker {
         IntArrayBuilder next = new IntArrayBuilder(Math.max(16, (end - start) / 8));
         for (int i = start; i < end; i++) {
             if (((i - start) & 0x3FF) == 0) {
-                if (SeedCrackState.getResetEpoch() != expectedEpoch || SeedCrackState.hasQueuedUnprocessedCostObservation(expectedEpoch)) {
+                if (SeedCrackState.getResetEpoch() != expectedEpoch) {
                     break;
                 }
             }

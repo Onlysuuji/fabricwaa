@@ -99,7 +99,7 @@ public final class EnchantHintOverlay {
             lines.add("waiting...");
         }
 
-        lines.add("※ low12 + current 3 costs only");
+        lines.add("※ low12 + 3 costs only");
         drawPanel(drawContext, client, guiLeft, guiTop, lines);
     }
 

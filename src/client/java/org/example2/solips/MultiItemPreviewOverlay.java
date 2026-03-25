@@ -45,8 +45,7 @@ public final class MultiItemPreviewOverlay {
     private static final int GRID_WIDTH = GRID_COLUMNS * CELL_WIDTH;
     private static final int GRID_HEIGHT = GRID_ROWS * CELL_HEIGHT;
 
-    private static final GridCache CURRENT_GRID = new GridCache();
-    private static final GridCache NEXT_GRID = new GridCache();
+    private static final GridCache SOLVED_GRID = new GridCache();
     private static boolean initialized = false;
 
     private static final ThreadLocal<ScratchMenuHolder> SCRATCH_MENU = ThreadLocal.withInitial(ScratchMenuHolder::new);
@@ -65,13 +64,13 @@ public final class MultiItemPreviewOverlay {
 
     private static void onHudRender(DrawContext drawContext, RenderTickCounter tickCounter) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null || client.world == null || !ClientFeatureToggle.isEnabled()) {
+        if (client.player == null || client.world == null || !ClientFeatureToggle.isEnabled() || !ClientFeatureToggle.isHudVisible()) {
             return;
         }
 
         renderLeftHud(client, drawContext, client.textRenderer);
 
-        if (SeedCrackState.isSolved() || PlayerSeedPredictState.getPredictedNextXpSeed() != Integer.MIN_VALUE) {
+        if (SeedCrackState.isSolved()) {
             renderRightTopGrid(client, drawContext, client.textRenderer);
         }
     }
@@ -80,87 +79,32 @@ public final class MultiItemPreviewOverlay {
         int left = 5;
         int y = 5;
 
-        drawContext.drawText(font, "resetKey=M", left, y, 0xAAAAAA, false);
+        drawContext.drawText(font, "hudKey=M", left, y, 0xAAAAAA, false);
         y += font.fontHeight + 2;
         drawContext.drawText(font, "toggleKey=N", left, y, 0xAAAAAA, false);
         y += font.fontHeight + 2;
         drawContext.drawText(font, "observations=" + SeedCrackState.getObservationCount(), left, y, 0xFFFFFF, false);
         y += font.fontHeight + 2;
-        drawContext.drawText(font, "applied=" + SeedCrackState.getAppliedObservationCount(), left, y, 0xFFFFFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "queued=" + SeedCrackState.getQueuedObservationCount(), left, y, 0xFFFFFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "running=" + SeedCrackState.isRunning(), left, y, 0xFFFFFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "elapsed=" + SeedCrackState.getElapsedFormatted(), left, y,
-                SeedCrackState.isSolved() ? 0x55FF55 : (SeedCrackState.isStopwatchRunning() ? 0xFFFF55 : 0xCCCCCC), false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "checked=" + SeedCrackState.getChecked(), left, y, 0xFFFFFF, false);
-        y += font.fontHeight + 2;
         drawContext.drawText(font, "matched=" + SeedCrackState.getMatched(), left, y, 0xFFFFFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "solved=" + SeedCrackState.isSolved(), left, y, 0xFFFFFF, false);
         y += font.fontHeight + 2;
 
         if (SeedCrackState.isSolved()) {
             drawContext.drawText(font, "solvedSeed=" + Integer.toUnsignedString(SeedCrackState.getSolvedSeed()), left, y, 0x55FF55, false);
             y += font.fontHeight + 2;
         }
-
-        ObservationRecord snapshot = ObservedEnchantState.snapshot();
-        if (snapshot != null) {
-            drawContext.drawText(font, "bookshelves=" + snapshot.getBookshelves() + " (auto)", left, y, 0xAAAAFF, false);
-            y += font.fontHeight + 2;
-            drawContext.drawText(font, "latest=" + snapshot.getKey(), left, y, 0xAAAAFF, false);
-            y += font.fontHeight + 2;
-        } else {
-            drawContext.drawText(font, "bookshelves=(none)", left, y, 0x888888, false);
-            y += font.fontHeight + 2;
-            drawContext.drawText(font, "latest=(none)", left, y, 0x888888, false);
-            y += font.fontHeight + 2;
-        }
-
-        int predictColor = PlayerSeedPredictState.isPredicting() ? 0x55FF55 : 0xFFAA55;
-        drawContext.drawText(font, "predict=" + PlayerSeedPredictState.getStatusText(), left, y, predictColor, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "anchorXpSeed=" + PlayerSeedPredictState.getAnchorXpSeedText(), left, y, 0xAAAAFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "lastXpSeed=" + PlayerSeedPredictState.getLastObservedXpSeedText(), left, y, 0xAAAAFF, false);
-        y += font.fontHeight + 2;
-        drawContext.drawText(font, "nextXpSeed=" + PlayerSeedPredictState.getPredictedNextXpSeedText(), left, y,
-                PlayerSeedPredictState.isPredicting() ? 0x55FF55 : 0xFF8888, false);
-        y += font.fontHeight + 2;
-        String predictReason = PlayerSeedPredictState.getInvalidationReason();
-        if (!predictReason.isEmpty()) {
-            drawContext.drawText(font, "predictReason=" + predictReason, left, y, 0xFF8888, false);
-        }
     }
 
     private static void renderRightTopGrid(MinecraftClient client, DrawContext drawContext, TextRenderer font) {
-        int currentSeed = SeedCrackState.isSolved() ? SeedCrackState.getSolvedSeed() : Integer.MIN_VALUE;
-        int nextSeed = PlayerSeedPredictState.getPredictedNextXpSeed();
-
-        rebuildGridCacheIfNeeded(client, CURRENT_GRID, currentSeed);
-        rebuildGridCacheIfNeeded(client, NEXT_GRID, nextSeed);
-
-        boolean hasCurrent = currentSeed != Integer.MIN_VALUE;
-        boolean hasNext = nextSeed != Integer.MIN_VALUE;
-        if (!hasCurrent && !hasNext) {
+        int solvedSeed = SeedCrackState.isSolved() ? SeedCrackState.getSolvedSeed() : Integer.MIN_VALUE;
+        if (solvedSeed == Integer.MIN_VALUE) {
             return;
         }
 
-        int startY = GRID_MARGIN;
-        int currentX = client.getWindow().getScaledWidth() - GRID_WIDTH - GRID_MARGIN;
-        if (hasCurrent) {
-            drawContext.drawText(font, "current", currentX, Math.max(0, startY - font.fontHeight - 1), 0x55FF55, false);
-            renderGrid(drawContext, font, CURRENT_GRID, currentX, startY);
-        }
+        rebuildGridCacheIfNeeded(client, SOLVED_GRID, solvedSeed);
 
-        if (hasNext) {
-            int nextX = hasCurrent ? currentX - GRID_WIDTH - GRID_MARGIN : currentX;
-            drawContext.drawText(font, "next", nextX, Math.max(0, startY - font.fontHeight - 1), 0xFFFF55, false);
-            renderGrid(drawContext, font, NEXT_GRID, nextX, startY);
-        }
+        int startY = GRID_MARGIN;
+        int startX = client.getWindow().getScaledWidth() - GRID_WIDTH - GRID_MARGIN;
+        renderGrid(drawContext, font, SOLVED_GRID, startX, startY);
     }
 
     private static void renderGrid(DrawContext drawContext, TextRenderer font, GridCache cache, int startX, int startY) {
@@ -205,8 +149,7 @@ public final class MultiItemPreviewOverlay {
     }
 
     private static void clearPreviewCache() {
-        clearGridCache(CURRENT_GRID);
-        clearGridCache(NEXT_GRID);
+        clearGridCache(SOLVED_GRID);
     }
 
     private static void clearGridCache(GridCache cache) {

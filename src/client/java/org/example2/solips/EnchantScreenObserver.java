@@ -35,10 +35,6 @@ public final class EnchantScreenObserver {
     private static boolean waitingForFreshMenuAfterItemChange = false;
     private static String itemChangeBaselineMenuFingerprint = null;
     private static int itemChangeWaitTicks = 0;
-    private static boolean lastDropPressed = false;
-    private static boolean lastSprinting = false;
-    private static int lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
-
     private EnchantScreenObserver() {
     }
 
@@ -65,9 +61,6 @@ public final class EnchantScreenObserver {
         waitingForFreshMenuAfterItemChange = false;
         itemChangeBaselineMenuFingerprint = null;
         itemChangeWaitTicks = 0;
-        lastDropPressed = false;
-        lastSprinting = false;
-        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -103,20 +96,11 @@ public final class EnchantScreenObserver {
             enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
             SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
         }
-        updatePredictionInvalidationTriggers(client);
         if (enchantSeedReset) {
             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
             clearOpenScreenObservationState();
             wasInEnchantScreen = true;
             return;
-        }
-
-        if (SeedCrackState.isSolved()) {
-            int solvedEnchantSeed = SeedCrackState.getSolvedSeed();
-            if (lastObservedSolvedEnchantSeed != solvedEnchantSeed) {
-                PlayerSeedPredictState.observeXpSeed(solvedEnchantSeed);
-                lastObservedSolvedEnchantSeed = solvedEnchantSeed;
-            }
         }
 
         ItemStack stack = menu.getSlot(0).getStack();
@@ -199,20 +183,6 @@ public final class EnchantScreenObserver {
 
         ObservedEnchantState.set(stack.getItem(), bookshelves, costs, clueIds, clueLevels);
         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
-    }
-
-    private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
-        boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
-        if (dropPressed && !lastDropPressed) {
-            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("drop");
-        }
-        lastDropPressed = dropPressed;
-
-        boolean sprinting = client.player != null && client.player.isSprinting();
-        if (sprinting && !lastSprinting) {
-            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("sprint");
-        }
-        lastSprinting = sprinting;
     }
 
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {
