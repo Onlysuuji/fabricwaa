@@ -64,6 +64,9 @@ public final class EnchantHintOverlay {
         int cost0 = handler.enchantmentPower[0];
         int cost1 = handler.enchantmentPower[1];
         int cost2 = handler.enchantmentPower[2];
+        int[] observedCosts = {cost0, cost1, cost2};
+        int[] rawCostMins = ObservationRecord.buildRawCostMinimums(bookshelves, observedCosts);
+        int[] rawCostMaxs = ObservationRecord.buildRawCostMaximums(bookshelves, observedCosts);
         String itemKey = String.valueOf(Registries.ITEM.getId(stack.getItem()));
 
         QueryKey key = new QueryKey(seed, hint, bookshelves, cost0, cost1, cost2, itemKey);
@@ -77,6 +80,11 @@ public final class EnchantHintOverlay {
         lines.add("hint=0x" + String.format("%03X", hint));
         lines.add("bookshelves=" + bookshelves);
         lines.add("costs=[" + cost0 + ", " + cost1 + ", " + cost2 + "]");
+        if (hasRawRangeDifference(observedCosts, rawCostMins, rawCostMaxs)) {
+            lines.add("raw=[" + formatRange(rawCostMins[0], rawCostMaxs[0]) + ", "
+                    + formatRange(rawCostMins[1], rawCostMaxs[1]) + ", "
+                    + formatRange(rawCostMins[2], rawCostMaxs[2]) + "]");
+        }
 
         FilterResult result = lastResult;
         if (result != null && result.key().equals(key)) {
@@ -116,23 +124,26 @@ public final class EnchantHintOverlay {
         Random random = Random.create(0L);
         int matches = 0;
         long upperBound = 1L << (32 - HINT_BITS);
+        int[] observedCosts = {key.cost0(), key.cost1(), key.cost2()};
+        int[] rawCostMins = ObservationRecord.buildRawCostMinimums(key.bookshelves(), observedCosts);
+        int[] rawCostMaxs = ObservationRecord.buildRawCostMaximums(key.bookshelves(), observedCosts);
 
         for (long upper = 0; upper < upperBound; upper++) {
             int candidate = (int) ((upper << HINT_BITS) | (long) key.hint());
             random.setSeed(candidate);
 
-            int c0 = normalizeCost(EnchantmentHelper.calculateRequiredExperienceLevel(random, 0, key.bookshelves(), stack), 0);
-            if (c0 != key.cost0()) {
+            int c0 = EnchantmentHelper.calculateRequiredExperienceLevel(random, 0, key.bookshelves(), stack);
+            if (!matchesRawCost(c0, rawCostMins[0], rawCostMaxs[0])) {
                 continue;
             }
 
-            int c1 = normalizeCost(EnchantmentHelper.calculateRequiredExperienceLevel(random, 1, key.bookshelves(), stack), 1);
-            if (c1 != key.cost1()) {
+            int c1 = EnchantmentHelper.calculateRequiredExperienceLevel(random, 1, key.bookshelves(), stack);
+            if (!matchesRawCost(c1, rawCostMins[1], rawCostMaxs[1])) {
                 continue;
             }
 
-            int c2 = normalizeCost(EnchantmentHelper.calculateRequiredExperienceLevel(random, 2, key.bookshelves(), stack), 2);
-            if (c2 != key.cost2()) {
+            int c2 = EnchantmentHelper.calculateRequiredExperienceLevel(random, 2, key.bookshelves(), stack);
+            if (!matchesRawCost(c2, rawCostMins[2], rawCostMaxs[2])) {
                 continue;
             }
 
@@ -146,8 +157,21 @@ public final class EnchantHintOverlay {
         return new FilterResult(key, matches, List.copyOf(preview), durationMillis);
     }
 
-    private static int normalizeCost(int value, int slot) {
-        return value < slot + 1 ? 0 : value;
+    private static boolean matchesRawCost(int value, int min, int max) {
+        return value >= min && value <= max;
+    }
+
+    private static boolean hasRawRangeDifference(int[] observedCosts, int[] rawCostMins, int[] rawCostMaxs) {
+        for (int slot = 0; slot < 3; slot++) {
+            if (observedCosts[slot] != rawCostMins[slot] || observedCosts[slot] != rawCostMaxs[slot]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String formatRange(int min, int max) {
+        return min == max ? Integer.toString(min) : (min + ".." + max);
     }
 
     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler handler) {

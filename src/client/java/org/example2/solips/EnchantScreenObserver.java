@@ -8,6 +8,7 @@ import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.screen.EnchantmentScreenHandler;
 import net.minecraft.screen.ScreenHandlerContext;
 import net.minecraft.util.hit.BlockHitResult;
@@ -22,6 +23,8 @@ public final class EnchantScreenObserver {
     private static final long LOOK_HINT_MAX_AGE_TICKS = 40L;
     private static final double MAX_TABLE_DISTANCE_SQUARED = 64.0D;
     private static final int ITEM_CHANGE_REFRESH_WAIT_TICKS = 8;
+    private static final int ENCHANT_SEED_CONFIRM_TICKS = 3;
+    private static final int UNKNOWN_ENCHANT_SEED = Integer.MIN_VALUE;
 
     private static boolean initialized = false;
     private static boolean wasInEnchantScreen = false;
@@ -36,6 +39,8 @@ public final class EnchantScreenObserver {
     private static boolean waitingForFreshMenuAfterItemChange = false;
     private static String itemChangeBaselineMenuFingerprint = null;
     private static int itemChangeWaitTicks = 0;
+    private static int pendingEnchantSeed = UNKNOWN_ENCHANT_SEED;
+    private static int pendingEnchantSeedTicks = 0;
     private EnchantScreenObserver() {
     }
 
@@ -62,6 +67,8 @@ public final class EnchantScreenObserver {
         waitingForFreshMenuAfterItemChange = false;
         itemChangeBaselineMenuFingerprint = null;
         itemChangeWaitTicks = 0;
+        pendingEnchantSeed = UNKNOWN_ENCHANT_SEED;
+        pendingEnchantSeedTicks = 0;
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -93,7 +100,7 @@ public final class EnchantScreenObserver {
 
         Integer currentEnchantSeed = menu.getSeed();
         boolean enchantSeedReset = false;
-        if (currentEnchantSeed != null) {
+        if (isConfirmedEnchantSeed(currentEnchantSeed)) {
             enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
             SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
         }
@@ -134,7 +141,7 @@ public final class EnchantScreenObserver {
             costs[i] = menu.enchantmentPower[i];
             clueIds[i] = menu.enchantmentId[i];
             clueLevels[i] = menu.enchantmentLevel[i];
-            if (costs[i] > 0 && clueIds[i] >= 0 && clueLevels[i] > 0) {
+            if (isUsableObservationSlot(stack.getItem(), costs[i], clueIds[i], clueLevels[i])) {
                 usable = true;
             }
         }
@@ -205,6 +212,37 @@ public final class EnchantScreenObserver {
                 && SeedCrackState.getPhase() == SeedCrackState.Phase.DONE
                 && SeedCrackState.getMatched() == 0
                 && SeedCrackState.getObservationCount() > 0;
+    }
+
+    private static boolean isUsableObservationSlot(Item item, int cost, int clueId, int clueLevel) {
+        if (cost <= 0) {
+            return false;
+        }
+        if (clueId >= 0 && clueLevel > 0) {
+            return true;
+        }
+
+        // Fishing rods keep low costs as constraints even when the clue is not usable.
+        return item == Items.FISHING_ROD && cost <= 9;
+    }
+
+    private static boolean isConfirmedEnchantSeed(Integer currentEnchantSeed) {
+        if (currentEnchantSeed == null) {
+            pendingEnchantSeed = UNKNOWN_ENCHANT_SEED;
+            pendingEnchantSeedTicks = 0;
+            return false;
+        }
+
+        if (pendingEnchantSeed != currentEnchantSeed) {
+            pendingEnchantSeed = currentEnchantSeed;
+            pendingEnchantSeedTicks = 1;
+            return false;
+        }
+
+        if (pendingEnchantSeedTicks < ENCHANT_SEED_CONFIRM_TICKS) {
+            pendingEnchantSeedTicks++;
+        }
+        return pendingEnchantSeedTicks >= ENCHANT_SEED_CONFIRM_TICKS;
     }
 
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {

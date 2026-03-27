@@ -35,8 +35,16 @@ public final class EnchantSeedCracker {
 
     private static final int[] CLUE_SLOT_ORDER = {2, 1, 0};
 
+    private static final Identifier CHANNELING_ID = Identifier.ofVanilla("channeling");
+    private static final Identifier BREACH_ID = Identifier.ofVanilla("breach");
     private static final Identifier DEPTH_STRIDER_ID = Identifier.ofVanilla("depth_strider");
+    private static final Identifier DENSITY_ID = Identifier.ofVanilla("density");
+    private static final Identifier IMPALING_ID = Identifier.ofVanilla("impaling");
+    private static final Identifier LOYALTY_ID = Identifier.ofVanilla("loyalty");
+    private static final Identifier RIPTIDE_ID = Identifier.ofVanilla("riptide");
+    private static final Identifier SWEEPING_EDGE_ID = Identifier.ofVanilla("sweeping_edge");
     private static final Identifier UNBREAKING_ID = Identifier.ofVanilla("unbreaking");
+    private static final Identifier WIND_BURST_ID = Identifier.ofVanilla("wind_burst");
 
     private static volatile Thread worker;
     private static volatile int workerEpoch = Integer.MIN_VALUE;
@@ -82,26 +90,36 @@ public final class EnchantSeedCracker {
         final int bookshelves;
         final int enchantability;
         final int[] costs;
+        final int[] rawCostMins;
+        final int[] rawCostMaxs;
         final int[] clueIds;
         final int[] clueLevels;
         final String itemPath;
         final boolean[] ignoredSlots = new boolean[3];
+        final boolean[] ignoredClueLevelSlots = new boolean[3];
+        final boolean[] shotbowBookUnbreakingSlots = new boolean[3];
+        final boolean onShotbow;
 
         PreparedObservation(ObservationRecord record) {
             this.stack = record.createStack();
             this.bookshelves = record.getBookshelves();
             this.enchantability = this.stack.getItem().getEnchantability();
             this.costs = record.getCosts();
+            this.rawCostMins = ObservationRecord.buildRawCostMinimums(this.bookshelves, this.costs);
+            this.rawCostMaxs = ObservationRecord.buildRawCostMaximums(this.bookshelves, this.costs);
             this.clueIds = record.getClueIds();
             this.clueLevels = record.getClueLevels();
             Identifier itemKey = Registries.ITEM.getId(this.stack.getItem());
             this.itemPath = itemKey == null ? "" : itemKey.getPath();
+            this.onShotbow = ShotbowServerUtil.isOnShotbow(MinecraftClient.getInstance());
         }
 
         void resolveIgnoredSlots(Registry<Enchantment> enchantmentRegistry) {
             Arrays.fill(ignoredSlots, false);
+            Arrays.fill(ignoredClueLevelSlots, false);
+            Arrays.fill(shotbowBookUnbreakingSlots, false);
             for (int slot = 0; slot < 3; slot++) {
-                if (itemPath.equals("fishing_rod") && costs[slot] <= 3) {
+                if (itemPath.equals("fishing_rod") && costs[slot] <= 9) {
                     ignoredSlots[slot] = true;
                     continue;
                 }
@@ -121,19 +139,24 @@ public final class EnchantSeedCracker {
                     continue;
                 }
 
-                if (itemPath.endsWith("_boots") && DEPTH_STRIDER_ID.equals(observedKey)) {
-                    ignoredSlots[slot] = true;
+                if (onShotbow && itemPath.endsWith("_boots") && DEPTH_STRIDER_ID.equals(observedKey)) {
+                    ignoredClueLevelSlots[slot] = true;
                     continue;
                 }
 
-                if(itemPath.equals("book") && (UNBREAKING_ID.equals(observedKey) || DEPTH_STRIDER_ID.equals(observedKey))){
-                    ignoredSlots[slot] = true;
+                if (onShotbow && itemPath.equals("book") && UNBREAKING_ID.equals(observedKey)) {
+                    shotbowBookUnbreakingSlots[slot] = true;
+                    if (clueLevels[slot] >= 4) {
+                        clueLevels[slot] = 3;
+                    }
                     continue;
                 }
 
-                if (itemPath.endsWith("_sword") && UNBREAKING_ID.equals(observedKey)) {
-                    ignoredSlots[slot] = true;
+                if (onShotbow && itemPath.equals("book") && DEPTH_STRIDER_ID.equals(observedKey)) {
+                    ignoredClueLevelSlots[slot] = true;
+                    continue;
                 }
+
             }
         }
     }
@@ -416,21 +439,27 @@ public final class EnchantSeedCracker {
 
     private static boolean matchesCosts(PreparedObservation record, int seed, Random random) {
         if (record.enchantability <= 0) {
-            return record.costs[0] == 0 && record.costs[1] == 0 && record.costs[2] == 0;
+            for (int slot = 0; slot < 3; slot++) {
+                if (!matchesRawCost(record, slot, 0)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         random.setSeed(seed);
 
         for (int slot = 0; slot < 3; slot++) {
-            int cost = EnchantmentHelper.calculateRequiredExperienceLevel(random, slot, record.bookshelves, record.stack);
-            if (cost < slot + 1) {
-                cost = 0;
-            }
-            if (cost != record.costs[slot]) {
+            int rawCost = EnchantmentHelper.calculateRequiredExperienceLevel(random, slot, record.bookshelves, record.stack);
+            if (!matchesRawCost(record, slot, rawCost)) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean matchesRawCost(PreparedObservation record, int slot, int rawCost) {
+        return rawCost >= record.rawCostMins[slot] && rawCost <= record.rawCostMaxs[slot];
     }
 
     private static boolean applyPendingClueConstraints(int expectedEpoch) {
@@ -601,6 +630,7 @@ public final class EnchantSeedCracker {
             int[] costs = record.costs;
             ItemStack stack = record.stack;
             boolean[] ignoredSlots = record.ignoredSlots;
+            boolean[] ignoredClueLevelSlots = record.ignoredClueLevelSlots;
 
             for (int slot : CLUE_SLOT_ORDER) {
                 if (costs[slot] <= 0 || ignoredSlots[slot]) {
@@ -617,11 +647,11 @@ public final class EnchantSeedCracker {
                     return false;
                 }
 
-                int actualId = enchantmentRegistry.getRawId(displayed.enchantment.value());
-                if (clueIds[slot] >= 0 && actualId != clueIds[slot]) {
+                if (!matchesDisplayedClueId(record, slot, enchantmentRegistry, displayed)) {
                     return false;
                 }
-                if (clueLevels[slot] > 0 && displayed.level != clueLevels[slot]) {
+                int displayedLevel = normalizeDisplayedClueLevel(record, slot, displayed.level);
+                if (!ignoredClueLevelSlots[slot] && clueLevels[slot] > 0 && displayedLevel != clueLevels[slot]) {
                     return false;
                 }
             }
@@ -656,6 +686,63 @@ public final class EnchantSeedCracker {
 
     private static EnchantmentLevelEntry pickDisplayedClue(EnchantmentScreenHandler menu, List<EnchantmentLevelEntry> list) {
         return EnchantmentScreenHandlerUtil.pickDisplayedClue(menu, list);
+    }
+
+    private static boolean matchesDisplayedClueId(
+            PreparedObservation record,
+            int slot,
+            Registry<Enchantment> enchantmentRegistry,
+            EnchantmentLevelEntry displayed
+    ) {
+        int observedClueId = record.clueIds[slot];
+        if (observedClueId < 0) {
+            return true;
+        }
+
+        int actualId = remapShotbowSwordClueId(record, enchantmentRegistry, displayed);
+        if (actualId == observedClueId) {
+            return true;
+        }
+
+        if (!record.shotbowBookUnbreakingSlots[slot]) {
+            return false;
+        }
+
+        Identifier displayedKey = enchantmentRegistry.getId(displayed.enchantment.value());
+        return LOYALTY_ID.equals(displayedKey)
+                || IMPALING_ID.equals(displayedKey)
+                || RIPTIDE_ID.equals(displayedKey)
+                || CHANNELING_ID.equals(displayedKey)
+                || SWEEPING_EDGE_ID.equals(displayedKey)
+                || DENSITY_ID.equals(displayedKey)
+                || BREACH_ID.equals(displayedKey)
+                || WIND_BURST_ID.equals(displayedKey);
+    }
+
+    private static int normalizeDisplayedClueLevel(PreparedObservation record, int slot, int displayedLevel) {
+        if (!record.shotbowBookUnbreakingSlots[slot]) {
+            return displayedLevel;
+        }
+        return displayedLevel >= 4 ? 3 : displayedLevel;
+    }
+
+    private static int remapShotbowSwordClueId(
+            PreparedObservation record,
+            Registry<Enchantment> enchantmentRegistry,
+            EnchantmentLevelEntry displayed
+    ) {
+        int actualId = enchantmentRegistry.getRawId(displayed.enchantment.value());
+        if (!record.onShotbow || !record.itemPath.endsWith("_sword")) {
+            return actualId;
+        }
+
+        Identifier displayedKey = enchantmentRegistry.getId(displayed.enchantment.value());
+        if (!SWEEPING_EDGE_ID.equals(displayedKey)) {
+            return actualId;
+        }
+
+        Enchantment unbreaking = enchantmentRegistry.get(UNBREAKING_ID);
+        return unbreaking == null ? actualId : enchantmentRegistry.getRawId(unbreaking);
     }
 
     private static void logObservationSummary(ObservationRecord record) {

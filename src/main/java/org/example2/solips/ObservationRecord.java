@@ -72,12 +72,56 @@ public final class ObservationRecord {
         return bookshelves + "|" + costs[0] + "," + costs[1] + "," + costs[2];
     }
 
+    public static int[] buildRawCostMinimums(int bookshelves, int[] costs) {
+        int[] mins = new int[3];
+        int[] maxs = new int[3];
+        fillRawCostBounds(bookshelves, costs, mins, maxs);
+        return mins;
+    }
+
+    public static int[] buildRawCostMaximums(int bookshelves, int[] costs) {
+        int[] mins = new int[3];
+        int[] maxs = new int[3];
+        fillRawCostBounds(bookshelves, costs, mins, maxs);
+        return maxs;
+    }
+
+    private static void fillRawCostBounds(int bookshelves, int[] costs, int[] mins, int[] maxs) {
+        for (int slot = 0; slot < 3; slot++) {
+            int observed = costs != null && slot < costs.length ? costs[slot] : 0;
+            if (observed > 0) {
+                mins[slot] = observed;
+                maxs[slot] = observed;
+                continue;
+            }
+
+            // Hidden slots still carry a raw cost below the display threshold.
+            mins[slot] = 0;
+            maxs[slot] = slot;
+        }
+
+        if (bookshelves == 0 && costs != null && costs.length >= 2 && costs[1] == 0) {
+            mins[1] = 1;
+            maxs[1] = 1;
+        }
+
+        if (costs != null && costs.length >= 3 && costs[2] == 0) {
+            if (bookshelves == 0) {
+                mins[2] = 1;
+                maxs[2] = 2;
+            } else if (bookshelves == 1) {
+                mins[2] = 2;
+                maxs[2] = 2;
+            }
+        }
+    }
+
     private static void normalizeIgnoredClues(Item item, int[] costs, int[] clueIds, int[] clueLevels) {
         if (item != Items.FISHING_ROD) {
             return;
         }
         for (int slot = 0; slot < 3; slot++) {
-            if (costs[slot] <= 3) {
+            if (costs[slot] <= 9) {
                 clueIds[slot] = -1;
                 clueLevels[slot] = 0;
             }

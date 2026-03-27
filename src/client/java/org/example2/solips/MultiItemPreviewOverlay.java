@@ -193,10 +193,20 @@ public final class MultiItemPreviewOverlay {
     private static void renderLeftHud(MinecraftClient client, DrawContext drawContext, TextRenderer font) {
         int left = 5;
         int y = 5;
+        String shotbowHost = ShotbowServerUtil.resolveShotbowHost(client);
 
         drawContext.drawText(font, "hudKey=M", left, y, 0xAAAAAA, false);
         y += font.fontHeight + 2;
         drawContext.drawText(font, "toggleKey=N", left, y, 0xAAAAAA, false);
+        y += font.fontHeight + 2;
+        drawContext.drawText(
+                font,
+                shotbowHost == null ? "shotbow=no" : "shotbow=" + shotbowHost,
+                left,
+                y,
+                shotbowHost == null ? 0xAAAAAA : 0x55FF55,
+                false
+        );
         y += font.fontHeight + 2;
         drawContext.drawText(font, "observations=" + SeedCrackState.getObservationCount(), left, y, 0xFFFFFF, false);
         y += font.fontHeight + 2;
