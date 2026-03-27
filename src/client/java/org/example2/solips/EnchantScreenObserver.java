@@ -1,5 +1,6 @@
 package org.example2.solips;
 
+import net.minecraft.block.EnchantingTableBlock;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
@@ -226,6 +227,15 @@ public final class EnchantScreenObserver {
     }
 
     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
+        Integer menuBookshelves = tryResolveMenuBookshelves(menu);
+        if (menuBookshelves != null) {
+            BlockPos menuTablePos = tryResolveMenuTablePos(menu);
+            if (menuTablePos != null) {
+                activeEnchantTablePos = menuTablePos;
+            }
+            return menuBookshelves;
+        }
+
         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
         if (menuTablePos != null) {
             activeEnchantTablePos = menuTablePos;
@@ -244,7 +254,7 @@ public final class EnchantScreenObserver {
             return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
         }
 
-        return null;
+        return tryResolveNearbyClientBookshelves(client);
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
@@ -330,49 +340,12 @@ public final class EnchantScreenObserver {
 
     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
         int count = 0;
-        count += countBookshelvesAtHeight(world, tablePos, 0);
-        count += countBookshelvesAtHeight(world, tablePos, 1);
-        return Math.min(count, 15);
-    }
-
-    private static int countBookshelvesAtHeight(World world, BlockPos tablePos, int dy) {
-        int count = 0;
-
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                if (Math.max(Math.abs(dx), Math.abs(dz)) != 2) {
-                    continue;
-                }
-
-                BlockPos shelfPos = tablePos.add(dx, dy, dz);
-                if (!world.getBlockState(shelfPos).isOf(Blocks.BOOKSHELF)) {
-                    continue;
-                }
-
-                if (canBookshelfPowerTable(world, tablePos, dy, dx, dz)) {
-                    count++;
-                }
+        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
+            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
+                count++;
             }
         }
-
-        return count;
-    }
-
-    private static boolean canBookshelfPowerTable(World world, BlockPos tablePos, int dy, int dx, int dz) {
-        if (Math.abs(dx) == 2 && Math.abs(dz) == 2) {
-            return isPassableGap(world, tablePos.add(dx / 2, dy, dz / 2));
-        }
-        if (Math.abs(dx) == 2) {
-            return isPassableGap(world, tablePos.add(dx / 2, dy, 0));
-        }
-        if (Math.abs(dz) == 2) {
-            return isPassableGap(world, tablePos.add(0, dy, dz / 2));
-        }
-        return false;
-    }
-
-    private static boolean isPassableGap(World world, BlockPos pos) {
-        return world.getBlockState(pos).isAir();
+        return Math.min(count, 15);
     }
 
     private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {
