@@ -46,10 +46,7 @@ public final class EnchantHintOverlay {
 
         ItemStack stack = handler.getSlot(0).getStack();
         if (stack.isEmpty()) {
-            drawPanel(drawContext, client, guiLeft, guiTop, List.of(
-                    "hint filter (12bit)",
-                    "item=(empty)"
-            ));
+            drawPanel(drawContext, client, guiLeft, guiTop, List.of("hint filter (12bit)"));
             return;
         }
 
@@ -80,7 +77,6 @@ public final class EnchantHintOverlay {
         lines.add("hint=0x" + String.format("%03X", hint));
         lines.add("bookshelves=" + bookshelves);
         lines.add("costs=[" + cost0 + ", " + cost1 + ", " + cost2 + "]");
-        lines.add("item=" + itemKey);
 
         FilterResult result = lastResult;
         if (result != null && result.key().equals(key)) {
@@ -99,7 +95,7 @@ public final class EnchantHintOverlay {
             lines.add("waiting...");
         }
 
-        lines.add("※ low12 + current 3 costs only");
+        lines.add("※ low12 + 3 costs only");
         drawPanel(drawContext, client, guiLeft, guiTop, lines);
     }
 

@@ -9,7 +9,7 @@ import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
 public final class ManualResetKeyHandler {
-    private static KeyBinding resetAllMapping;
+    private static KeyBinding toggleHudMapping;
     private static KeyBinding toggleEnabledMapping;
     private static boolean initialized = false;
 
@@ -22,8 +22,8 @@ public final class ManualResetKeyHandler {
         }
         initialized = true;
 
-        resetAllMapping = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.solips.reset_all",
+        toggleHudMapping = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.solips.toggle_hud",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_M,
                 "key.categories.solips"
@@ -43,19 +43,17 @@ public final class ManualResetKeyHandler {
         while (toggleEnabledMapping.wasPressed()) {
             triggerToggle(client);
         }
-        while (resetAllMapping.wasPressed()) {
-            triggerReset(client);
+        while (toggleHudMapping.wasPressed()) {
+            triggerHudToggle(client);
         }
     }
 
-    private static void triggerReset(MinecraftClient client) {
-        SeedCrackState.resetAll();
-        PlayerSeedPredictState.resetAll();
-        EnchantScreenObserver.clearClientObservationState();
-        System.out.println("[manual-reset] cleared by M key");
+    private static void triggerHudToggle(MinecraftClient client) {
+        boolean visible = ClientFeatureToggle.toggleHudVisible();
+        System.out.println(visible ? "[hud] shown by M key" : "[hud] hidden by M key");
 
         if (client.player != null) {
-            client.player.sendMessage(Text.literal("[solips] reset all"), true);
+            client.player.sendMessage(Text.literal(visible ? "[solips] hud shown" : "[solips] hud hidden"), true);
         }
     }
 
@@ -63,7 +61,6 @@ public final class ManualResetKeyHandler {
         boolean enabled = ClientFeatureToggle.toggle();
         if (!enabled) {
             SeedCrackState.resetAll();
-            PlayerSeedPredictState.resetAll();
             EnchantScreenObserver.clearClientObservationState();
             System.out.println("[toggle] disabled by N key");
         } else {

@@ -2,6 +2,7 @@ package org.example2.solips;
 
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 
 import java.util.Arrays;
 
@@ -20,7 +21,8 @@ public final class ObservationRecord {
         this.costs = Arrays.copyOf(costs, 3);
         this.clueIds = Arrays.copyOf(clueIds, 3);
         this.clueLevels = Arrays.copyOf(clueLevels, 3);
-        this.key = buildKey(item, bookshelves, costs, clueIds, clueLevels);
+        normalizeIgnoredClues(this.item, this.costs, this.clueIds, this.clueLevels);
+        this.key = buildKey(this.item, this.bookshelves, this.costs, this.clueIds, this.clueLevels);
         this.costKey = buildCostKey(bookshelves, costs);
     }
 
@@ -57,13 +59,28 @@ public final class ObservationRecord {
     }
 
     public static String buildKey(Item item, int bookshelves, int[] costs, int[] clueIds, int[] clueLevels) {
+        int[] normalizedClueIds = Arrays.copyOf(clueIds, 3);
+        int[] normalizedClueLevels = Arrays.copyOf(clueLevels, 3);
+        normalizeIgnoredClues(item, costs, normalizedClueIds, normalizedClueLevels);
         return item + "|" + bookshelves + "|"
                 + costs[0] + "," + costs[1] + "," + costs[2] + "|"
-                + clueIds[0] + "," + clueIds[1] + "," + clueIds[2] + "|"
-                + clueLevels[0] + "," + clueLevels[1] + "," + clueLevels[2];
+                + normalizedClueIds[0] + "," + normalizedClueIds[1] + "," + normalizedClueIds[2] + "|"
+                + normalizedClueLevels[0] + "," + normalizedClueLevels[1] + "," + normalizedClueLevels[2];
     }
 
     public static String buildCostKey(int bookshelves, int[] costs) {
         return bookshelves + "|" + costs[0] + "," + costs[1] + "," + costs[2];
+    }
+
+    private static void normalizeIgnoredClues(Item item, int[] costs, int[] clueIds, int[] clueLevels) {
+        if (item != Items.FISHING_ROD) {
+            return;
+        }
+        for (int slot = 0; slot < 3; slot++) {
+            if (costs[slot] <= 3) {
+                clueIds[slot] = -1;
+                clueLevels[slot] = 0;
+            }
+        }
     }
 }

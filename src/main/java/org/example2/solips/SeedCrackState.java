@@ -149,6 +149,10 @@ public final class SeedCrackState {
         return true;
     }
 
+    public static synchronized boolean hasObservationKey(String key) {
+        return key != null && observationKeys.contains(key);
+    }
+
     public static synchronized ObservationRecord activateNextObservation(int expectedEpoch) {
         if (expectedEpoch != resetEpoch) {
             return null;

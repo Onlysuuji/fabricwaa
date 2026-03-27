@@ -23,6 +23,9 @@ public final class EnchantHintHudRenderer {
 
     private static void onHudRender(DrawContext drawContext, RenderTickCounter tickCounter) {
         MinecraftClient client = MinecraftClient.getInstance();
+        if (!ClientFeatureToggle.isEnabled() || !ClientFeatureToggle.isHudVisible()) {
+            return;
+        }
         if (!(client.currentScreen instanceof EnchantmentScreen)) {
             return;
         }

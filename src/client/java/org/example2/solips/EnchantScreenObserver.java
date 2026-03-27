@@ -1,5 +1,6 @@
 package org.example2.solips;
 
+import net.minecraft.block.EnchantingTableBlock;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
@@ -35,10 +36,6 @@ public final class EnchantScreenObserver {
     private static boolean waitingForFreshMenuAfterItemChange = false;
     private static String itemChangeBaselineMenuFingerprint = null;
     private static int itemChangeWaitTicks = 0;
-    private static boolean lastDropPressed = false;
-    private static boolean lastSprinting = false;
-    private static int lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
-
     private EnchantScreenObserver() {
     }
 
@@ -65,9 +62,6 @@ public final class EnchantScreenObserver {
         waitingForFreshMenuAfterItemChange = false;
         itemChangeBaselineMenuFingerprint = null;
         itemChangeWaitTicks = 0;
-        lastDropPressed = false;
-        lastSprinting = false;
-        lastObservedSolvedEnchantSeed = Integer.MIN_VALUE;
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -103,7 +97,6 @@ public final class EnchantScreenObserver {
             enchantSeedReset = SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
             SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
         }
-        updatePredictionInvalidationTriggers(client);
         if (enchantSeedReset) {
             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
             clearOpenScreenObservationState();
@@ -112,11 +105,9 @@ public final class EnchantScreenObserver {
         }
 
         if (SeedCrackState.isSolved()) {
-            int solvedEnchantSeed = SeedCrackState.getSolvedSeed();
-            if (lastObservedSolvedEnchantSeed != solvedEnchantSeed) {
-                PlayerSeedPredictState.observeXpSeed(solvedEnchantSeed);
-                lastObservedSolvedEnchantSeed = solvedEnchantSeed;
-            }
+            pendingKey = null;
+            pendingTicks = 0;
+            return;
         }
 
         ItemStack stack = menu.getSlot(0).getStack();
@@ -191,8 +182,16 @@ public final class EnchantScreenObserver {
             return;
         }
 
-        System.out.println("[obs-read] item=" + stack.getItem()
-                + " bookshelves=" + bookshelves
+        if (isZeroMatchDeadEnd() && !SeedCrackState.hasObservationKey(key)) {
+            System.out.println("[dead-end-reset] restarting from new observation key=" + key);
+            SeedCrackState.resetAll();
+            if (currentEnchantSeed != null) {
+                SeedCrackState.updateEnchantSeedAndCheckReset(currentEnchantSeed);
+                SeedCrackState.setHintFilterFromSeed(currentEnchantSeed);
+            }
+        }
+
+        System.out.println("[obs-read] bookshelves=" + bookshelves
                 + " costs=" + Arrays.toString(costs)
                 + " clueIds=" + Arrays.toString(clueIds)
                 + " clueLv=" + Arrays.toString(clueLevels));
@@ -201,18 +200,11 @@ public final class EnchantScreenObserver {
         EnchantSeedCracker.submitObservation(new ObservationRecord(stack.getItem(), bookshelves, costs, clueIds, clueLevels));
     }
 
-    private static void updatePredictionInvalidationTriggers(MinecraftClient client) {
-        boolean dropPressed = client.options != null && client.options.dropKey.isPressed();
-        if (dropPressed && !lastDropPressed) {
-            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("drop");
-        }
-        lastDropPressed = dropPressed;
-
-        boolean sprinting = client.player != null && client.player.isSprinting();
-        if (sprinting && !lastSprinting) {
-            PlayerSeedPredictState.invalidatePredictionKeepLastObserved("sprint");
-        }
-        lastSprinting = sprinting;
+    private static boolean isZeroMatchDeadEnd() {
+        return !SeedCrackState.isRunning()
+                && SeedCrackState.getPhase() == SeedCrackState.Phase.DONE
+                && SeedCrackState.getMatched() == 0
+                && SeedCrackState.getObservationCount() > 0;
     }
 
     private static String buildMenuFingerprint(int[] costs, int[] clueIds, int[] clueLevels) {
@@ -235,6 +227,15 @@ public final class EnchantScreenObserver {
     }
 
     private static Integer resolveBookshelves(MinecraftClient client, EnchantmentScreenHandler menu) {
+        Integer menuBookshelves = tryResolveMenuBookshelves(menu);
+        if (menuBookshelves != null) {
+            BlockPos menuTablePos = tryResolveMenuTablePos(menu);
+            if (menuTablePos != null) {
+                activeEnchantTablePos = menuTablePos;
+            }
+            return menuBookshelves;
+        }
+
         BlockPos menuTablePos = tryResolveMenuTablePos(menu);
         if (menuTablePos != null) {
             activeEnchantTablePos = menuTablePos;
@@ -253,7 +254,7 @@ public final class EnchantScreenObserver {
             return countBookshelvesAtTable(client.world, lastLookedEnchantTablePos);
         }
 
-        return null;
+        return tryResolveNearbyClientBookshelves(client);
     }
 
     private static Integer tryResolveMenuBookshelves(EnchantmentScreenHandler menu) {
@@ -339,49 +340,12 @@ public final class EnchantScreenObserver {
 
     private static int countBookshelvesAtTable(World world, BlockPos tablePos) {
         int count = 0;
-        count += countBookshelvesAtHeight(world, tablePos, 0);
-        count += countBookshelvesAtHeight(world, tablePos, 1);
-        return Math.min(count, 15);
-    }
-
-    private static int countBookshelvesAtHeight(World world, BlockPos tablePos, int dy) {
-        int count = 0;
-
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                if (Math.max(Math.abs(dx), Math.abs(dz)) != 2) {
-                    continue;
-                }
-
-                BlockPos shelfPos = tablePos.add(dx, dy, dz);
-                if (!world.getBlockState(shelfPos).isOf(Blocks.BOOKSHELF)) {
-                    continue;
-                }
-
-                if (canBookshelfPowerTable(world, tablePos, dy, dx, dz)) {
-                    count++;
-                }
+        for (BlockPos offset : EnchantingTableBlock.POWER_PROVIDER_OFFSETS) {
+            if (EnchantingTableBlock.canAccessPowerProvider(world, tablePos, offset)) {
+                count++;
             }
         }
-
-        return count;
-    }
-
-    private static boolean canBookshelfPowerTable(World world, BlockPos tablePos, int dy, int dx, int dz) {
-        if (Math.abs(dx) == 2 && Math.abs(dz) == 2) {
-            return isPassableGap(world, tablePos.add(dx / 2, dy, dz / 2));
-        }
-        if (Math.abs(dx) == 2) {
-            return isPassableGap(world, tablePos.add(dx / 2, dy, 0));
-        }
-        if (Math.abs(dz) == 2) {
-            return isPassableGap(world, tablePos.add(0, dy, dz / 2));
-        }
-        return false;
-    }
-
-    private static boolean isPassableGap(World world, BlockPos pos) {
-        return world.getBlockState(pos).isAir();
+        return Math.min(count, 15);
     }
 
     private static int normalizeBookshelvesFromObservedCosts(int bookshelves, int[] costs) {
