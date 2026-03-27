@@ -35,15 +35,12 @@ public final class SeedCrackState {
     private static volatile long stopwatchEndNanos = 0L;
     private static volatile boolean stopwatchRunning = false;
     private static volatile boolean stopwatchFinished = false;
-    private static volatile boolean clueFilterInitialized = false;
     private static volatile boolean costSearchInitialized = false;
 
     private static final List<ObservationRecord> appliedObservations = new ArrayList<>();
     private static final ArrayDeque<ObservationRecord> queuedObservations = new ArrayDeque<>();
     private static final Set<String> observationKeys = new HashSet<>();
     private static final Set<String> processedCostKeys = new HashSet<>();
-    private static final Set<String> processedClueKeys = new HashSet<>();
-
     private static int[] costCandidates = new int[0];
     private static int[] finalCandidates = new int[0];
 
@@ -62,13 +59,11 @@ public final class SeedCrackState {
         costMatched = 0;
         trackedEnchantSeed = UNKNOWN_ENCHANT_SEED;
         hintFilterValue = UNKNOWN_HINT_FILTER;
-        clueFilterInitialized = false;
         costSearchInitialized = false;
         appliedObservations.clear();
         queuedObservations.clear();
         observationKeys.clear();
         processedCostKeys.clear();
-        processedClueKeys.clear();
         costCandidates = new int[0];
         finalCandidates = new int[0];
         resetStopwatch();
@@ -169,19 +164,6 @@ public final class SeedCrackState {
         return new ArrayList<>(appliedObservations);
     }
 
-    public static synchronized List<ObservationRecord> getPendingClueObservationsSnapshot(int expectedEpoch) {
-        if (expectedEpoch != resetEpoch) {
-            return List.of();
-        }
-        List<ObservationRecord> pending = new ArrayList<>();
-        for (ObservationRecord record : appliedObservations) {
-            if (!processedClueKeys.contains(record.getKey())) {
-                pending.add(record);
-            }
-        }
-        return pending;
-    }
-
     public static synchronized boolean hasProcessedCostKey(String costKey) {
         return processedCostKeys.contains(costKey);
     }
@@ -192,30 +174,8 @@ public final class SeedCrackState {
         }
     }
 
-    public static synchronized boolean hasProcessedClueObservationKey(String key) {
-        return processedClueKeys.contains(key);
-    }
-
-    public static synchronized void markObservationClueProcessed(String key, int expectedEpoch) {
-        if (expectedEpoch == resetEpoch) {
-            processedClueKeys.add(key);
-        }
-    }
-
     public static synchronized boolean hasQueuedObservations(int expectedEpoch) {
         return expectedEpoch == resetEpoch && !queuedObservations.isEmpty();
-    }
-
-    public static synchronized boolean hasQueuedUnprocessedCostObservation(int expectedEpoch) {
-        if (expectedEpoch != resetEpoch) {
-            return false;
-        }
-        for (ObservationRecord record : queuedObservations) {
-            if (!processedCostKeys.contains(record.getCostKey())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     public static synchronized void beginRun(int expectedEpoch) {
@@ -278,20 +238,6 @@ public final class SeedCrackState {
         return Arrays.copyOf(costCandidates, costCandidates.length);
     }
 
-    public static synchronized void finishCostPhase(int expectedEpoch) {
-        if (expectedEpoch != resetEpoch) {
-            return;
-        }
-        phase = Phase.CLUE_FILTER;
-        checked = 0L;
-        phaseTotal = costCandidates.length;
-        matched = finalCandidates.length;
-    }
-
-    public static synchronized boolean isClueFilterInitialized() {
-        return clueFilterInitialized;
-    }
-
     public static synchronized boolean isCostSearchInitialized() {
         return costSearchInitialized;
     }
@@ -299,12 +245,6 @@ public final class SeedCrackState {
     public static synchronized void markCostSearchInitialized(int expectedEpoch) {
         if (expectedEpoch == resetEpoch) {
             costSearchInitialized = true;
-        }
-    }
-
-    public static synchronized void markClueFilterInitialized(int expectedEpoch) {
-        if (expectedEpoch == resetEpoch) {
-            clueFilterInitialized = true;
         }
     }
 
@@ -332,13 +272,6 @@ public final class SeedCrackState {
         }
         finalCandidates = Arrays.copyOf(candidates, candidates.length);
         matched = finalCandidates.length;
-    }
-
-    public static synchronized int[] getFinalCandidatesArraySnapshot(int expectedEpoch) {
-        if (expectedEpoch != resetEpoch) {
-            return new int[0];
-        }
-        return Arrays.copyOf(finalCandidates, finalCandidates.length);
     }
 
     public static synchronized void finishObservationRun(int expectedEpoch) {
@@ -421,33 +354,4 @@ public final class SeedCrackState {
         return costMatched;
     }
 
-    public static boolean isStopwatchRunning() {
-        return stopwatchRunning;
-    }
-
-    public static boolean isStopwatchFinished() {
-        return stopwatchFinished;
-    }
-
-    public static long getElapsedMillis() {
-        long start = stopwatchStartNanos;
-        if (start == 0L) {
-            return 0L;
-        }
-        long end = stopwatchRunning ? System.nanoTime() : (stopwatchEndNanos == 0L ? start : stopwatchEndNanos);
-        long delta = Math.max(0L, end - start);
-        return delta / 1_000_000L;
-    }
-
-    public static String getElapsedFormatted() {
-        long millis = getElapsedMillis();
-        long hours = millis / 3_600_000L;
-        long minutes = (millis / 60_000L) % 60L;
-        long seconds = (millis / 1_000L) % 60L;
-        long ms = millis % 1_000L;
-        if (hours > 0L) {
-            return String.format("%d:%02d:%02d.%03d", hours, minutes, seconds, ms);
-        }
-        return String.format("%02d:%02d.%03d", minutes, seconds, ms);
-    }
 }

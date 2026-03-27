@@ -25,11 +25,4 @@ public final class ClientFeatureToggle {
         return hudVisible;
     }
 
-    public static void setEnabled(boolean value) {
-        enabled = value;
-    }
-
-    public static void setHudVisible(boolean value) {
-        hudVisible = value;
-    }
 }
