@@ -6,11 +6,11 @@ import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
+import net.minecraft.item.*;
 import net.minecraft.screen.EnchantmentScreenHandler;
 import net.minecraft.screen.ScreenHandlerContext;
+import net.minecraft.screen.slot.Slot;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
@@ -41,6 +41,13 @@ public final class EnchantScreenObserver {
     private static int itemChangeWaitTicks = 0;
     private static int pendingEnchantSeed = UNKNOWN_ENCHANT_SEED;
     private static int pendingEnchantSeedTicks = 0;
+
+    private static final int AUTO_PROBE_SETTLE_TICKS = 5;
+
+    private static Item autoProbeCurrentItem = null;
+    private static int autoProbeSourceSlot = -1;
+    private static int autoProbeSettleTicks = 0;
+    private static final java.util.Set<Item> autoProbeTriedItems = new java.util.HashSet<>();
     private EnchantScreenObserver() {
     }
 
@@ -54,6 +61,7 @@ public final class EnchantScreenObserver {
 
     public static void clearClientObservationState() {
         clearOpenScreenObservationState();
+        clearAutoProbeState();
         wasInEnchantScreen = false;
         activeEnchantTablePos = null;
     }
@@ -69,6 +77,13 @@ public final class EnchantScreenObserver {
         itemChangeWaitTicks = 0;
         pendingEnchantSeed = UNKNOWN_ENCHANT_SEED;
         pendingEnchantSeedTicks = 0;
+    }
+
+    private static void clearAutoProbeState() {
+        autoProbeCurrentItem = null;
+        autoProbeSourceSlot = -1;
+        autoProbeSettleTicks = 0;
+        autoProbeTriedItems.clear();
     }
 
     private static void onClientTick(MinecraftClient client) {
@@ -107,6 +122,7 @@ public final class EnchantScreenObserver {
         if (enchantSeedReset) {
             System.out.println("[seed-reset] newEnchantSeed=" + Integer.toUnsignedString(currentEnchantSeed));
             clearOpenScreenObservationState();
+            clearAutoProbeState();
             wasInEnchantScreen = true;
             return;
         }
@@ -116,6 +132,8 @@ public final class EnchantScreenObserver {
             pendingTicks = 0;
             return;
         }
+
+        runAutoProbeIfNeeded(client, menu);
 
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
@@ -395,4 +413,108 @@ public final class EnchantScreenObserver {
         }
         return bookshelves;
     }
+
+
+    private static void runAutoProbeIfNeeded(MinecraftClient client, EnchantmentScreenHandler menu) {
+        if (client.player == null || client.interactionManager == null) {
+            return;
+        }
+        int matched = SeedCrackState.getMatched();
+        if (matched == 0 || matched == 1) {
+            return;
+        }
+        if (!client.player.currentScreenHandler.getCursorStack().isEmpty()) {
+            return;
+        }
+
+        Slot enchantSlot = menu.getSlot(0);
+        if (autoProbeCurrentItem != null) {
+            ItemStack current = enchantSlot.getStack();
+            if (current.isEmpty() || current.getItem() != autoProbeCurrentItem) {
+                autoProbeCurrentItem = null;
+                autoProbeSourceSlot = -1;
+                autoProbeSettleTicks = 0;
+                return;
+            }
+
+            autoProbeSettleTicks++;
+            if (autoProbeSettleTicks < AUTO_PROBE_SETTLE_TICKS) {
+                return;
+            }
+
+            if (autoProbeSourceSlot >= 0 && autoProbeSourceSlot < menu.slots.size()) {
+                clickSlot(client, menu, 0);
+                clickSlot(client, menu, autoProbeSourceSlot);
+            }
+            autoProbeCurrentItem = null;
+            autoProbeSourceSlot = -1;
+            autoProbeSettleTicks = 0;
+            return;
+        }
+
+        if (!enchantSlot.getStack().isEmpty()) {
+            return;
+        }
+
+        int nextSlot = findBestAutoProbeSourceSlot(menu);
+        if (nextSlot < 0) {
+            return;
+        }
+
+        ItemStack sourceStack = menu.getSlot(nextSlot).getStack();
+        autoProbeCurrentItem = sourceStack.getItem();
+        autoProbeSourceSlot = nextSlot;
+        autoProbeSettleTicks = 0;
+        autoProbeTriedItems.add(autoProbeCurrentItem);
+
+        clickSlot(client, menu, nextSlot);
+        clickSlot(client, menu, 0);
+    }
+
+    private static void clickSlot(MinecraftClient client, EnchantmentScreenHandler menu, int slotId) {
+        client.interactionManager.clickSlot(menu.syncId, slotId, 0, SlotActionType.PICKUP, client.player);
+    }
+
+    private static int findBestAutoProbeSourceSlot(EnchantmentScreenHandler menu) {
+        int bestSlot = -1;
+        int bestPriority = Integer.MAX_VALUE;
+        for (int i = 2; i < menu.slots.size(); i++) {
+            Slot slot = menu.getSlot(i);
+            ItemStack stack = slot.getStack();
+            if (stack.isEmpty()) {
+                continue;
+            }
+            if (!stack.isEnchantable() && !stack.isOf(Items.BOOK)) {
+                continue;
+            }
+            if (autoProbeTriedItems.contains(stack.getItem())) {
+                continue;
+            }
+
+            int priority = getAutoProbePriority(stack);
+            if (priority < bestPriority) {
+                bestPriority = priority;
+                bestSlot = i;
+            }
+        }
+        return bestSlot;
+    }
+
+    private static int getAutoProbePriority(ItemStack stack) {
+        Item item = stack.getItem();
+        if (item == Items.BOOK) {
+            return 0;
+        }
+        if (item instanceof ArmorItem) {
+            return 1;
+        }
+        if (item instanceof SwordItem) {
+            return 2;
+        }
+        if (item instanceof ToolItem || item instanceof MiningToolItem || item == Items.SHEARS || item == Items.FISHING_ROD) {
+            return 3;
+        }
+        return 4;
+    }
+
 }
