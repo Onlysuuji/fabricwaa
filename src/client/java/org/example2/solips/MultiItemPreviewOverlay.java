@@ -201,6 +201,15 @@ public final class MultiItemPreviewOverlay {
         y += font.fontHeight + 2;
         drawContext.drawText(
                 font,
+                "autoKey=H " + (ClientFeatureToggle.isAutoInsertEnabled() ? "on" : "off"),
+                left,
+                y,
+                ClientFeatureToggle.isAutoInsertEnabled() ? 0x55FF55 : 0xAAAAAA,
+                false
+        );
+        y += font.fontHeight + 2;
+        drawContext.drawText(
+                font,
                 shotbowHost == null ? "shotbow=no" : "shotbow=" + shotbowHost,
                 left,
                 y,

@@ -7,12 +7,14 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.EnchantmentScreen;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.EnchantmentScreenHandler;
 import net.minecraft.screen.ScreenHandlerContext;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.Identifier;
 import net.minecraft.world.World;
 
 import java.util.Arrays;
@@ -44,11 +46,47 @@ public final class EnchantScreenObserver {
 
     private static final int AUTO_PROBE_SETTLE_TICKS = 5;
 
+    private static boolean pendingAutoInsertOnOpen = false;
     private static Item autoProbeCurrentItem = null;
     private static int autoProbeSourceSlot = -1;
     private static int autoProbeSettleTicks = 0;
-    private static final java.util.Set<Item> autoProbeTriedItems = new java.util.HashSet<>();
+    private static final java.util.Set<AutoProbeAttemptKey> autoProbeTriedItems = new java.util.HashSet<>();
     private EnchantScreenObserver() {
+    }
+
+    private record AutoProbeAttemptKey(String itemKey, int bookshelves) {
+    }
+
+    private static AutoProbeAttemptKey createAutoProbeAttemptKey(Item item, int bookshelves) {
+        return new AutoProbeAttemptKey(getAutoProbeItemGroupKey(item), bookshelves);
+    }
+
+    private static String getAutoProbeItemGroupKey(Item item) {
+        Identifier id = Registries.ITEM.getId(item);
+        if (id == null) {
+            return String.valueOf(item);
+        }
+
+        if (item instanceof PickaxeItem || item instanceof AxeItem || item instanceof ShovelItem) {
+            String materialKey = stripSharedToolSuffix(id.getPath());
+            if (materialKey != null) {
+                return id.getNamespace() + ":" + materialKey + "_tool";
+            }
+        }
+        return id.toString();
+    }
+
+    private static String stripSharedToolSuffix(String path) {
+        if (path.endsWith("_pickaxe")) {
+            return path.substring(0, path.length() - "_pickaxe".length());
+        }
+        if (path.endsWith("_shovel")) {
+            return path.substring(0, path.length() - "_shovel".length());
+        }
+        if (path.endsWith("_axe")) {
+            return path.substring(0, path.length() - "_axe".length());
+        }
+        return null;
     }
 
     public static void initialize() {
@@ -61,9 +99,62 @@ public final class EnchantScreenObserver {
 
     public static void clearClientObservationState() {
         clearOpenScreenObservationState();
+        clearAutoProbeTransientState();
+        wasInEnchantScreen = false;
+        activeEnchantTablePos = null;
+    }
+
+    public static void resetClientObservationState() {
+        clearOpenScreenObservationState();
         clearAutoProbeState();
         wasInEnchantScreen = false;
         activeEnchantTablePos = null;
+    }
+
+    public static void onAutoInsertToggleChanged(MinecraftClient client, boolean enabled) {
+        if (enabled) {
+            if (client != null && client.currentScreen instanceof EnchantmentScreen) {
+                pendingAutoInsertOnOpen = true;
+            }
+            return;
+        }
+
+        pendingAutoInsertOnOpen = false;
+        if (client == null || client.player == null || client.interactionManager == null) {
+            return;
+        }
+        if (!(client.player.currentScreenHandler instanceof EnchantmentScreenHandler menu)) {
+            clearAutoProbeTransientState();
+            return;
+        }
+        if (!client.player.currentScreenHandler.getCursorStack().isEmpty()) {
+            return;
+        }
+
+        Slot enchantSlot = menu.getSlot(0);
+        if (autoProbeCurrentItem != null && !enchantSlot.getStack().isEmpty() && enchantSlot.getStack().getItem() == autoProbeCurrentItem) {
+            returnCurrentProbeItem(client, menu);
+            return;
+        }
+
+        clearAutoProbeTransientState();
+    }
+
+    private static void clearScreenCloseState() {
+        clearOpenScreenObservationState();
+        clearAutoProbeTransientState();
+        wasInEnchantScreen = false;
+        activeEnchantTablePos = null;
+    }
+
+    private static void clearEmptyEnchantSlotObservationState() {
+        ObservedEnchantState.clear();
+        pendingKey = null;
+        pendingTicks = 0;
+        lastSeenItem = null;
+        waitingForFreshMenuAfterItemChange = false;
+        itemChangeBaselineMenuFingerprint = null;
+        itemChangeWaitTicks = 0;
     }
 
     private static void clearOpenScreenObservationState() {
@@ -79,10 +170,15 @@ public final class EnchantScreenObserver {
         pendingEnchantSeedTicks = 0;
     }
 
-    private static void clearAutoProbeState() {
+    private static void clearAutoProbeTransientState() {
+        pendingAutoInsertOnOpen = false;
         autoProbeCurrentItem = null;
         autoProbeSourceSlot = -1;
         autoProbeSettleTicks = 0;
+    }
+
+    private static void clearAutoProbeState() {
+        clearAutoProbeTransientState();
         autoProbeTriedItems.clear();
     }
 
@@ -93,7 +189,7 @@ public final class EnchantScreenObserver {
 
         if (!ClientFeatureToggle.isEnabled()) {
             if (wasInEnchantScreen || pendingKey != null || ObservedEnchantState.snapshot() != null) {
-                clearClientObservationState();
+                resetClientObservationState();
             }
             return;
         }
@@ -101,16 +197,24 @@ public final class EnchantScreenObserver {
         boolean inEnchantScreen = client.currentScreen instanceof EnchantmentScreen;
         if (!inEnchantScreen) {
             if (wasInEnchantScreen) {
-                clearClientObservationState();
+                clearScreenCloseState();
             }
             wasInEnchantScreen = false;
             return;
         }
+        boolean enteredEnchantScreen = !wasInEnchantScreen;
         wasInEnchantScreen = true;
 
-        if (client.player == null || !(client.player.currentScreenHandler instanceof EnchantmentScreenHandler menu)) {
-            clearClientObservationState();
+        if (client.player == null) {
+            resetClientObservationState();
             return;
+        }
+        if (!(client.player.currentScreenHandler instanceof EnchantmentScreenHandler menu)) {
+            clearScreenCloseState();
+            return;
+        }
+        if (enteredEnchantScreen) {
+            pendingAutoInsertOnOpen = true;
         }
 
         Integer currentEnchantSeed = menu.getSeed();
@@ -127,17 +231,17 @@ public final class EnchantScreenObserver {
             return;
         }
 
+        runAutoProbeIfNeeded(client, menu);
+
         if (SeedCrackState.isSolved()) {
             pendingKey = null;
             pendingTicks = 0;
             return;
         }
 
-        runAutoProbeIfNeeded(client, menu);
-
         ItemStack stack = menu.getSlot(0).getStack();
         if (stack.isEmpty()) {
-            clearOpenScreenObservationState();
+            clearEmptyEnchantSlotObservationState();
             return;
         }
 
@@ -419,8 +523,16 @@ public final class EnchantScreenObserver {
         if (client.player == null || client.interactionManager == null) {
             return;
         }
-        int matched = SeedCrackState.getMatched();
-        if (matched == 0 || matched == 1) {
+        if (!ClientFeatureToggle.isAutoInsertEnabled()) {
+            pendingAutoInsertOnOpen = false;
+            if (autoProbeCurrentItem != null && client.player.currentScreenHandler.getCursorStack().isEmpty()) {
+                Slot enchantSlot = menu.getSlot(0);
+                if (!enchantSlot.getStack().isEmpty() && enchantSlot.getStack().getItem() == autoProbeCurrentItem) {
+                    returnCurrentProbeItem(client, menu);
+                    return;
+                }
+            }
+            clearAutoProbeTransientState();
             return;
         }
         if (!client.player.currentScreenHandler.getCursorStack().isEmpty()) {
@@ -437,26 +549,39 @@ public final class EnchantScreenObserver {
                 return;
             }
 
+            if (shouldStopAutoProbe()) {
+                returnCurrentProbeItem(client, menu);
+                return;
+            }
+
             autoProbeSettleTicks++;
             if (autoProbeSettleTicks < AUTO_PROBE_SETTLE_TICKS) {
                 return;
             }
 
-            if (autoProbeSourceSlot >= 0 && autoProbeSourceSlot < menu.slots.size()) {
-                clickSlot(client, menu, 0);
-                clickSlot(client, menu, autoProbeSourceSlot);
-            }
-            autoProbeCurrentItem = null;
-            autoProbeSourceSlot = -1;
-            autoProbeSettleTicks = 0;
+            returnCurrentProbeItem(client, menu);
             return;
         }
 
         if (!enchantSlot.getStack().isEmpty()) {
+            pendingAutoInsertOnOpen = false;
             return;
         }
 
-        int nextSlot = findBestAutoProbeSourceSlot(menu);
+        if (!pendingAutoInsertOnOpen && autoProbeTriedItems.isEmpty()) {
+            return;
+        }
+
+        if (shouldStopAutoProbe()) {
+            pendingAutoInsertOnOpen = false;
+            return;
+        }
+
+        Integer currentBookshelves = resolveBookshelves(client, menu);
+        int attemptBookshelves = currentBookshelves == null ? -1 : currentBookshelves;
+
+        int nextSlot = findBestEnchantInputSourceSlot(menu, true, attemptBookshelves);
+        pendingAutoInsertOnOpen = false;
         if (nextSlot < 0) {
             return;
         }
@@ -465,17 +590,53 @@ public final class EnchantScreenObserver {
         autoProbeCurrentItem = sourceStack.getItem();
         autoProbeSourceSlot = nextSlot;
         autoProbeSettleTicks = 0;
-        autoProbeTriedItems.add(autoProbeCurrentItem);
+        autoProbeTriedItems.add(createAutoProbeAttemptKey(autoProbeCurrentItem, attemptBookshelves));
 
-        clickSlot(client, menu, nextSlot);
-        clickSlot(client, menu, 0);
+        moveProbeItemToEnchantSlot(client, menu, nextSlot);
     }
 
-    private static void clickSlot(MinecraftClient client, EnchantmentScreenHandler menu, int slotId) {
-        client.interactionManager.clickSlot(menu.syncId, slotId, 0, SlotActionType.PICKUP, client.player);
+    private static boolean shouldStopAutoProbe() {
+        if (SeedCrackState.getObservationCount() == 0) {
+            return false;
+        }
+        if (SeedCrackState.isRunning() || SeedCrackState.getQueuedObservationCount() > 0) {
+            return false;
+        }
+        if (SeedCrackState.getPhase() != SeedCrackState.Phase.DONE) {
+            return false;
+        }
+        int matched = SeedCrackState.getMatched();
+        return matched == 0 || matched == 1;
     }
 
-    private static int findBestAutoProbeSourceSlot(EnchantmentScreenHandler menu) {
+    private static void returnCurrentProbeItem(MinecraftClient client, EnchantmentScreenHandler menu) {
+        if (autoProbeSourceSlot >= 0 && autoProbeSourceSlot < menu.slots.size()) {
+            clickSlot(client, menu, 0, 0);
+            clickSlot(client, menu, autoProbeSourceSlot, 0);
+        }
+        autoProbeCurrentItem = null;
+        autoProbeSourceSlot = -1;
+        autoProbeSettleTicks = 0;
+    }
+
+    private static void moveProbeItemToEnchantSlot(MinecraftClient client, EnchantmentScreenHandler menu, int sourceSlot) {
+        ItemStack sourceStack = menu.getSlot(sourceSlot).getStack();
+        if (sourceStack.getCount() > 1 && sourceStack.getMaxCount() > 1) {
+            clickSlot(client, menu, sourceSlot, 0);
+            clickSlot(client, menu, 0, 1);
+            clickSlot(client, menu, sourceSlot, 0);
+            return;
+        }
+
+        clickSlot(client, menu, sourceSlot, 0);
+        clickSlot(client, menu, 0, 0);
+    }
+
+    private static void clickSlot(MinecraftClient client, EnchantmentScreenHandler menu, int slotId, int button) {
+        client.interactionManager.clickSlot(menu.syncId, slotId, button, SlotActionType.PICKUP, client.player);
+    }
+
+    private static int findBestEnchantInputSourceSlot(EnchantmentScreenHandler menu, boolean skipTriedItems, int bookshelves) {
         int bestSlot = -1;
         int bestPriority = Integer.MAX_VALUE;
         for (int i = 2; i < menu.slots.size(); i++) {
@@ -484,10 +645,13 @@ public final class EnchantScreenObserver {
             if (stack.isEmpty()) {
                 continue;
             }
+            if (stack.isOf(Items.FISHING_ROD)) {
+                continue;
+            }
             if (!stack.isEnchantable() && !stack.isOf(Items.BOOK)) {
                 continue;
             }
-            if (autoProbeTriedItems.contains(stack.getItem())) {
+            if (skipTriedItems && autoProbeTriedItems.contains(createAutoProbeAttemptKey(stack.getItem(), bookshelves))) {
                 continue;
             }
 

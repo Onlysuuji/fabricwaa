@@ -11,6 +11,7 @@ import org.lwjgl.glfw.GLFW;
 public final class ManualResetKeyHandler {
     private static KeyBinding toggleHudMapping;
     private static KeyBinding toggleEnabledMapping;
+    private static KeyBinding toggleAutoInsertMapping;
     private static boolean initialized = false;
 
     private ManualResetKeyHandler() {
@@ -36,6 +37,13 @@ public final class ManualResetKeyHandler {
                 "key.categories.solips"
         ));
 
+        toggleAutoInsertMapping = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.solips.toggle_auto_insert",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_H,
+                "key.categories.solips"
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(ManualResetKeyHandler::onClientTick);
     }
 
@@ -45,6 +53,9 @@ public final class ManualResetKeyHandler {
         }
         while (toggleHudMapping.wasPressed()) {
             triggerHudToggle(client);
+        }
+        while (toggleAutoInsertMapping.wasPressed()) {
+            triggerAutoInsertToggle(client);
         }
     }
 
@@ -61,7 +72,7 @@ public final class ManualResetKeyHandler {
         boolean enabled = ClientFeatureToggle.toggle();
         if (!enabled) {
             SeedCrackState.resetAll();
-            EnchantScreenObserver.clearClientObservationState();
+            EnchantScreenObserver.resetClientObservationState();
             System.out.println("[toggle] disabled by N key");
         } else {
             System.out.println("[toggle] enabled by N key");
@@ -69,6 +80,16 @@ public final class ManualResetKeyHandler {
 
         if (client.player != null) {
             client.player.sendMessage(Text.literal(enabled ? "[solips] enabled" : "[solips] disabled"), true);
+        }
+    }
+
+    private static void triggerAutoInsertToggle(MinecraftClient client) {
+        boolean enabled = ClientFeatureToggle.toggleAutoInsert();
+        EnchantScreenObserver.onAutoInsertToggleChanged(client, enabled);
+        System.out.println(enabled ? "[auto-insert] enabled by H key" : "[auto-insert] disabled by H key");
+
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal(enabled ? "[solips] auto insert enabled" : "[solips] auto insert disabled"), true);
         }
     }
 }
